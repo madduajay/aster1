@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Personal agent</title><link rel="icon" href="/static/icon.svg" type="image/svg+xml"><link rel="stylesheet" href="/static/style.css">
+  <script src="/static/browser-control.js" defer></script><script src="/static/app.js" defer></script>
+</head>
+<body>
+  <header><span class="brand">Personal agent<span id="who"></span></span><nav><button id="new" hidden>New Chat</button><button id="auth">Login</button></nav></header>
+  <main>
+    <section id="login" class="login">
+      <h1>A little help,<br>whenever you need it.</h1><p id="login-note">Sign in to your personal space.</p>
+      <form id="login-form"><label>Username<input id="username" autocomplete="username" required maxlength="64"></label><label>Password<input id="password" type="password" autocomplete="current-password" required maxlength="256"></label><p class="hint">Press Enter or use Login above.</p></form>
+      <form id="password-form" hidden><label>Current password<input id="current-password" type="password" autocomplete="current-password" required></label><label>New password<input id="new-password" type="password" autocomplete="new-password" minlength="12" maxlength="256" required></label><p class="hint">Choose at least 12 characters, then press Enter.</p></form>
+    </section>
+    <section id="chat" hidden><details id="browser-view" class="browser-view" open hidden><summary>Browser <span id="browser-state">Live</span></summary><a id="browser-url" target="_blank" rel="noopener noreferrer"></a><div id="browser-surface"><img id="browser-frame" alt="Live browser view"><textarea id="website-keyboard" aria-label="Website keyboard" tabindex="-1" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false"></textarea></div><p id="browser-hint" class="hint">Live view · read-only</p></details><div id="messages" aria-live="polite"></div><div id="welcome"><h1>What’s on your mind?</h1><p>Ask a question, research an idea, or get something done.</p></div></section>
+  </main>
+  <footer id="composer" hidden><div id="status" role="status"></div><textarea id="input" rows="1" placeholder="Message your agent…" aria-label="Message your agent" title="Message your agent, or drop a file here to upload it"></textarea><p class="hint">Enter to send · Shift+Enter for a new line · Drop a file to upload</p></footer>
+  <p id="error" role="alert"></p>
+</body>
+</html>
