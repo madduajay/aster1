@@ -13,7 +13,7 @@ import sys
 os.environ.update(ANONYMIZED_TELEMETRY='false',BROWSER_USE_CLOUD_SYNC='false',BROWSER_USE_LOGGING_LEVEL='critical',
                   CDP_LOGGING_LEVEL='CRITICAL',BROWSER_USE_DISABLE_EXTENSIONS='1',DO_NOT_TRACK='1')
 sys.path.insert(0,str(Path(__file__).resolve().parent))
-from browser_policy import ALLOWED_ACTIONS, WRITE_ACTIONS, READ_ACTIONS, action_binding
+from browser_policy import navigation_action, ALLOWED_ACTIONS, WRITE_ACTIONS, READ_ACTIONS, action_binding
 from browser_recovery import PAGE_OBSERVER, RecoveryBudget, combine_observations, input_need
 from browser_diagnostics import diagnostic_stage, exception_details, clean_message, safe_target
 from browser_connection import FreshObservationRequired, connection_error, resilient_browser
@@ -33,7 +33,11 @@ const clean=x=>String(x||'').replace(/\\s+/g,' ').trim();
 const name=clean(e.getAttribute('aria-label')||(e.getAttribute('aria-labelledby')||'').split(/\\s+/).map(id=>d.getElementById(id)?.textContent||'').join(' ')||Array.from(e.labels||[]).map(x=>x.innerText).join(' ')||e.innerText||e.title||e.placeholder||e.name);
 const control=e.tagName==='LABEL'&&e.control?e.control:e,sensitive=control.matches('input[type=password],input[autocomplete^="cc-"],input[autocomplete="one-time-code"]')||/password|passcode|verification.?code|one.?time|\\botp\\b|\\bcvv\\b|\\bcvc\\b|card.?number/i.test(name+' '+control.name+' '+control.autocomplete);
 const f=control.form||e.closest('form'),searchRoot=e.closest('search,[role=search]');
+const controlled=(control.getAttribute('aria-controls')||'').split(/\\s+/).filter(Boolean).slice(0,5).map(id=>d.getElementById(id)).filter(Boolean);
+const controlsNavigation=controlled.some(panel=>!panel.matches('form')&&!panel.querySelector('form,input[type=password]')&&(['menu','menubar','navigation','tablist','listbox'].includes(panel.getAttribute('role'))||panel.tagName==='NAV'||!!panel.querySelector('a[href]')));
+
 return {url:d.location.href,node:{tag:e.tagName,name:name.slice(0,300),role:control.getAttribute('role')||({A:'link',SELECT:'combobox',INPUT:{radio:'radio',checkbox:'checkbox'}[control.type]||'textbox'})[control.tagName]||'button',type:control.type||'',href:e.href||'',id:e.id,name_attr:control.name||'',disabled:!!control.disabled||control.getAttribute('aria-disabled')==='true',checked:control.checked??null,selected:control.getAttribute('aria-selected'),value:sensitive?'[hidden]':String(control.value||'').slice(0,500),sensitive,editable:e.isContentEditable,visible:visible(e),search_context:!!searchRoot,
+navigation_context:!!control.closest('nav,[role=navigation],[role=menubar],[role=menu]'),has_popup:control.getAttribute('aria-haspopup')||'',expanded:control.getAttribute('aria-expanded'),controls_navigation:controlsNavigation,details_toggle:control.tagName==='SUMMARY'&&control.parentElement?.tagName==='DETAILS',
 form:f?{method:(f.method||'get').toLowerCase(),action:f.action||d.location.href,role:f.getAttribute('role')||'',sensitive:!!f.querySelector('input[type=password],input[autocomplete^="cc-"],input[autocomplete="one-time-code"]')}:null}};
 }"""
 OBSERVE_PAGE=PAGE_OBSERVER
@@ -245,8 +249,6 @@ async def main():
             if name=='request_user':
                 response=await ask_user(params.get('kind','information'),params['prompt'])
                 return ActionResult(extracted_content='User response for this task only: '+response)
-            if self.uncertain and name not in READ_ACTIONS:
-                return self.retry(name,params,{},'uncertain submission: inspect only')
             seq+=1
             dispatched=False
             before={};category='';stage='observe_before_action'
@@ -254,6 +256,8 @@ async def main():
             try:
                 before=await observe(browser_session,target_params)
                 stage='check_user_input'
+                if self.uncertain and name not in READ_ACTIONS and not navigation_action(name, params, before):
+                    return self.retry(name,params,before,'uncertain submission: inspect only')
                 need=input_need(before)
                 if need and (name=='done' or before.get('manual_required') and name not in READ_ACTIONS):
                     response=await ask_user(need['kind'],need['prompt'])

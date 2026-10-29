@@ -37,6 +37,48 @@ def search_action(name,params,observed):
     return False
 
 
+
+def navigation_action(name, params, observed):
+    """Proven page navigation, independent of website names and action history.
+
+    A button's label alone is insufficient. Require a safe link destination,
+    a navigation landmark, a menu disclosure, a tab or native details control.
+    Submitting controls, risky labels/URLs and sensitive forms never qualify.
+    """
+    if name == 'go_back':
+        return True
+    if name == 'navigate':
+        url = params.get('url', '')
+        return urlsplit(url).scheme in {'http', 'https'} and not URL_MUTATION.search(action_url(url))
+    node = observed.get('node') or {}
+    if name == 'send_keys':
+        if params.get('keys', '').casefold() not in {'enter', 'space'}:
+            return False
+    elif name not in {'click', 'click_selector'}:
+        return False
+    if node.get('sensitive') or node.get('disabled'):
+        return False
+    label, href = node.get('name', ''), node.get('href', '')
+    if RISK.search(label) or CART_ADD.fullmatch(label.strip()) or URL_MUTATION.search(action_url(href)):
+        return False
+    form = node.get('form')
+    if form and (form.get('sensitive') or node.get('type') in {'submit', 'image'} or form.get('method', '').lower() != 'get'):
+        return False
+    if node.get('tag') == 'A' and href:
+        return urlsplit(href).scheme in {'http', 'https'}
+    # Keyboard activation of a textbox may submit a form, even inside a header.
+    if node.get('tag') in {'INPUT', 'TEXTAREA', 'SELECT'} or node.get('editable'):
+        return False
+    role = node.get('role')
+    if role == 'tab' or node.get('details_toggle'):
+        return True
+    if node.get('navigation_context') and role in {'button', 'menuitem', 'link'}:
+        return True
+    menu = node.get('has_popup') in {'true', 'menu', 'listbox'}
+    disclosure = node.get('expanded') in {'true', 'false'} and node.get('controls_navigation')
+    return bool((menu or disclosure) and role in {'button', 'menuitem', 'link'})
+
+
 def fingerprint(value):
     return hashlib.sha256(json.dumps(value,sort_keys=True,ensure_ascii=False).encode()).hexdigest()
 
@@ -47,11 +89,13 @@ def classify_action(name,params,observed,inspect_only=False):
     if name=='request_user':return 'input',''
     if name=='screenshot' and params.get('file_name'):return 'blocked','Screenshot file writes are disabled; use the viewport image.'
     if name=='done' and params.get('files_to_display'):return 'blocked','Files are delivered only through the owned download API.'
-    if name=='find_elements' and any(a not in {'href','src','aria-label','aria-labelledby','aria-selected','aria-checked','aria-disabled','title','name','type','id','class','checked','selected','disabled','for','role'} for a in params.get('attributes',[])):
+    if name=='find_elements' and any(a not in {'href','src','aria-label','aria-labelledby','aria-selected','aria-checked','aria-disabled','aria-haspopup','aria-expanded','aria-controls','title','name','type','id','class','checked','selected','disabled','for','role'} for a in params.get('attributes',[])):
         return 'blocked','Only public control attributes may be extracted; private field values are excluded.'
     if name in READ_ACTIONS:return 'read',''
     if observed.get('manual_required'):return 'blocked','Manual login or human verification is required; use request_user with kind=manual.'
-    if inspect_only and name not in {'navigate','go_back'}:return 'blocked','This recovery task is inspection only.'
+    navigation = navigation_action(name, params, observed)
+    if inspect_only and not navigation:return 'blocked','This recovery task is inspection only.'
+    if navigation:return 'read',''
     if name=='input' and (node.get('sensitive') or PRIVATE.search(params.get('text',''))):
         return 'blocked','Enter passwords, payment credentials, and secrets manually.'
     account=bool(re.search(r'/(?:account|settings|profile|security|billing|payment)(?:/|$)',urlsplit(observed.get('url','')).path,re.I))
@@ -89,8 +133,6 @@ def classify_action(name,params,observed,inspect_only=False):
             return 'preparation',''
         if not account and CART_ADD.fullmatch(label) and not (form or {}).get('sensitive') and not re.search(r'/(?:checkout|payment)(?:/|$)', urlsplit(observed.get('url','')).path, re.I):
             return 'mutation',''  # Reversible cart preparation; still receipt/duplicate protected.
-        if node.get('tag')=='A' and href and not RISK.search(label) and not URL_MUTATION.search(action_url(href)):
-            return 'read',''  # Link navigation is not the eventual form submission.
         if not account and not RISK.search(label) and not URL_MUTATION.search(action_url(href)):
             if node.get('role') in {'radio','checkbox','option','tab','combobox','listbox','slider','spinbutton'} or node.get('tag')=='SELECT':return 'preparation',''
             form=node.get('form')
