@@ -106,6 +106,7 @@ class Service:
         elif pending_input_id:
             raise LookupError('Pending input not found')
         mid = self.db.message(user, session, 'user', text)
+        self.memory.save_declared_name(user, session, mid)
         title = self.db.owned_session(user, session)['title']
         if title == 'New chat':
             self.db.execute("UPDATE sessions SET title=? WHERE id=?", (text[:80], session))
@@ -117,8 +118,10 @@ class Service:
                 status = 'quarantined' if text.strip() == '/memory review' else 'active'
                 dependencies += [f['id'] for f in self.db.rows('SELECT id FROM facts WHERE user_id=? AND status=?', (user, status))]
             self.db.record_dependencies(user, session, answer, dependencies)
+            self.memory.queue_summary(user, session)
             try:
                 await self.memory.summarize(user, session)
+                self.memory.clear_completed_summary(user, session)
             except Exception:
                 pass  # All exact command exchanges remain available on failure.
             return {"reply": reply}
@@ -249,6 +252,11 @@ class Service:
         status = 'completed'
         dependencies = []
         try:
+            try:
+                async with asyncio.timeout(25):
+                    await self.memory.retry_pending(user, session)
+            except Exception:
+                self.db.event(run, 'progress', 'A previous memory update is still pending; its original conversation is retained.')
             context = self.memory.context(user, session, '')
             if sum(len(m['content']) for m in context['unsummarized_messages']) > 100000:
                 await self.memory.summarize(user, session)
@@ -256,6 +264,7 @@ class Service:
             current = self.db.one("SELECT id,role,content FROM messages WHERE session_id=? AND role='user' ORDER BY id DESC LIMIT 1", (session,))
             latest = current['content']
             context['current_user_message'] = current
+            context['session_id'] = session
             context['clock'] = clock_context()
             context['unsummarized_messages'] = [m for m in context['unsummarized_messages'] if m['id'] != current['id']]
             context['recent_messages'] = [m for m in context['recent_messages'] if m['id'] != current['id']]
@@ -356,10 +365,12 @@ class Service:
             if self.tasks.get(run) is asyncio.current_task():self.tasks.pop(run, None)
 
     async def digest(self, user, session, run):
-        self.db.event(run, 'progress', 'Saving session summary and explicitly requested memory…')
+        self.memory.queue_summary(user, session)
+        self.db.event(run, 'progress', 'Saving session summary and evaluating lasting personal memory…')
         try:
             async with asyncio.timeout(60):
                 await self.memory.summarize(user, session)
+                self.memory.clear_completed_summary(user, session)
         except Exception:
             self.db.event(run, 'progress', 'Summary update is pending. Unsummarized messages remain available for the next turn.')
 

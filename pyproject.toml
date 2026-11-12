@@ -2,7 +2,7 @@
 name = "aster1-personal-agent"
 version = "0.1.0"
 requires-python = ">=3.12"
-dependencies = ["fastapi", "uvicorn", "websockets", "deepagents", "langgraph-checkpoint-sqlite", "langchain-openai", "openai", "playwright", "argon2-cffi"]
+dependencies = ["fastapi", "uvicorn", "websockets", "deepagents", "langgraph-checkpoint-sqlite", "langchain-openai", "openai", "playwright", "argon2-cffi", "filetype"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

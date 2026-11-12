@@ -68,6 +68,10 @@ class Database:
             CREATE TABLE IF NOT EXISTS artifacts (
                 id TEXT PRIMARY KEY, user_id TEXT NOT NULL, run_id TEXT NOT NULL REFERENCES runs(id),
                 path TEXT NOT NULL, filename TEXT NOT NULL, media TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS message_attachments (
+                message_id INTEGER NOT NULL REFERENCES messages(id),
+                artifact_id TEXT NOT NULL REFERENCES artifacts(id),
+                PRIMARY KEY(message_id,artifact_id));
             CREATE TABLE IF NOT EXISTS summary_snapshots (
                 session_id TEXT NOT NULL REFERENCES sessions(id), covered INTEGER NOT NULL,
                 summary TEXT NOT NULL, PRIMARY KEY(session_id,covered));
@@ -185,14 +189,17 @@ class Database:
                 WHERE facts_fts MATCH ? AND f.user_id=? AND f.status='active' ORDER BY rank LIMIT 100""", (match, user))
         # Always consult the permanent store, including a bounded set of defaults.
         defaults = self.rows("SELECT * FROM facts WHERE user_id=? AND status='active' ORDER BY updated DESC,id DESC LIMIT 8", (user,))
-        candidates = {r['id']: r for r in found + defaults}
+        identity = self.rows("SELECT * FROM facts WHERE user_id=? AND status='active' AND memory_key='profile.name'", (user,))
+        candidates = {r['id']: r for r in found + defaults + identity}
         now = time.time()
         def score(row):
             words = set(re.findall(r'\w{2,}', row['text'].lower()))
             relevance = len(words.intersection(terms)) / max(len(terms), 1)
             freshness = math.exp(-max(0, now - row['updated']) / (90 * 86400))
             return (4 * relevance + freshness + 0.1 * row['importance'], row['updated'], row['id'])
-        return sorted(candidates.values(), key=score, reverse=True)[:12]
+        ranked = sorted(candidates.values(), key=score, reverse=True)
+        # Core identity is available on every turn even after many newer facts.
+        return identity + [r for r in ranked if r['memory_key'] != 'profile.name'][:12-len(identity)]
 
     def visible_messages(self, user, session):
         row = self.owned_session(user, session)
@@ -240,10 +247,12 @@ class Database:
         db.execute("UPDATE runs SET status='interrupted',approval=NULL,approval_id=NULL,error='Memory changed; inspect before retrying' WHERE user_id=? AND status='approval'", (user,))
         return bool(affected)
 
-    def put_fact(self, user, text, source, key, *, importance=5, evidence='', conn=None):
+    def put_fact(self, user, text, source, key, *, importance=5, evidence='', origin='explicit', conn=None):
+        if origin not in {'explicit', 'self_declared'}:
+            raise ValueError('Invalid memory origin')
         if conn is None:
             with self.connect() as db:
-                return self.put_fact(user, text, source, key, importance=importance, evidence=evidence, conn=db)
+                return self.put_fact(user, text, source, key, importance=importance, evidence=evidence, origin=origin, conn=db)
         source_row = conn.execute("""SELECT m.* FROM messages m JOIN sessions s ON s.id=m.session_id
             WHERE m.id=? AND s.user_id=? AND m.role='user'""", (source, user)).fetchone()
         if not source_row:
@@ -253,7 +262,7 @@ class Database:
         if previous and (source_row['created'] < previous['updated'] or previous['source_message'] == source):
             return previous['id'], False
         if previous and previous['normalized'] == normalized:
-            conn.execute('UPDATE facts SET updated=?,source_message=?,evidence=? WHERE id=?', (source_row['created'], source, evidence, previous['id']))
+            conn.execute('UPDATE facts SET updated=?,source_message=?,evidence=?,origin=? WHERE id=?', (source_row['created'], source, evidence, origin, previous['id']))
             conn.execute('INSERT OR IGNORE INTO message_facts VALUES(?,?)', (source, previous['id']))
             return previous['id'], False
         invalidated = False
@@ -264,12 +273,12 @@ class Database:
         if existing:
             fid = existing[0]
             conn.execute("""UPDATE facts SET memory_key=?,source_message=?,importance=?,updated=?,status='active',
-                origin='explicit',evidence=?,supersedes=? WHERE id=?""",
-                (key, source, importance, source_row['created'], evidence, previous['id'] if previous else None, fid))
+                origin=?,evidence=?,supersedes=? WHERE id=?""",
+                (key, source, importance, source_row['created'], origin, evidence, previous['id'] if previous else None, fid))
         else:
             fid = conn.execute("""INSERT INTO facts(user_id,text,normalized,source_message,importance,created,
-                memory_key,updated,status,origin,evidence,supersedes) VALUES(?,?,?,?,?,?,?,?, 'active','explicit',?,?)""",
-                (user, text.strip(), normalized, source, importance, time.time(), key, source_row['created'], evidence,
+                memory_key,updated,status,origin,evidence,supersedes) VALUES(?,?,?,?,?,?,?,?, 'active',?,?,?)""",
+                (user, text.strip(), normalized, source, importance, time.time(), key, source_row['created'], origin, evidence,
                  previous['id'] if previous else None)).lastrowid
         conn.execute('INSERT OR IGNORE INTO message_facts VALUES(?,?)', (source, fid))
         return fid, invalidated

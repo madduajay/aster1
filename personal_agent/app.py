@@ -24,6 +24,7 @@ from .service import Service
 from .approvals import approval_text, display_message
 from .browser_recovery import input_text
 from .browser_diagnostics import load_diagnostics
+from .attachments import image_media, attachment_view, IMAGE_MEDIA
 
 
 def token_hash(value):
@@ -223,6 +224,13 @@ def create_app(database=None, service=None):
     def session(sid: str, request: Request, uid=Depends(user)):
         row = db(request).owned_session(uid, sid)
         messages=db(request).rows("SELECT id,role,content FROM messages WHERE session_id=? ORDER BY id", (sid,))
+        attachments=db(request).rows('''SELECT a.*,ma.message_id FROM message_attachments ma
+            JOIN artifacts a ON a.id=ma.artifact_id JOIN messages m ON m.id=ma.message_id
+            WHERE m.session_id=? AND a.user_id=?''',(sid,uid))
+        by_message={}
+        for attachment in attachments:
+            by_message.setdefault(attachment['message_id'],[]).append(attachment_view(attachment))
+        for item in messages:item['attachments']=by_message.get(item['id'],[])
         active = db(request).one("SELECT id,status,approval,approval_id FROM runs WHERE user_id=? AND session_id=? AND status IN ('running','resuming','approval','input')", (uid, sid))
         if active:
             active['after'] = db(request).one("SELECT COALESCE(MAX(id),0) AS cursor FROM events WHERE run_id=? AND kind IN ('approval','input')", (active['id'],))['cursor']
@@ -386,7 +394,7 @@ def create_app(database=None, service=None):
         if not row or not Path(row['path']).is_file():
             raise HTTPException(404)
         return FileResponse(row['path'], media_type=row['media'], filename=row['filename'],
-                            content_disposition_type='inline' if row['media'] == 'image/png' else 'attachment')
+                            content_disposition_type='inline' if row['media'] in IMAGE_MEDIA else 'attachment')
 
     @app.post('/api/uploads')
     async def upload(request: Request, session_id: str, uid=Depends(user)):
@@ -411,12 +419,16 @@ def create_app(database=None, service=None):
                     output.write(chunk)
             if not total:
                 raise HTTPException(400,'File is empty')
+            media=image_media(path) or 'application/octet-stream'
+            if media in IMAGE_MEDIA and total>20_000_000:
+                raise HTTPException(413,'Images must be at most 20 MB for image questions')
+            text=f'Uploaded file: {filename} (artifact ID {aid}). This file is available for this user; sharing it with a website requires approval.'
             with database.connect() as conn:
                 conn.execute("INSERT INTO runs(id,user_id,session_id,status,created) VALUES(?,?,?,'completed',?)",(run_id,uid,session_id,time.time()))
-                conn.execute('INSERT INTO artifacts VALUES(?,?,?,?,?,?)',(aid,uid,run_id,str(path),filename,'application/octet-stream'))
-            text=f'Uploaded file: {filename} (artifact ID {aid}). This file is available for this user; sharing it with a website requires approval.'
-            database.message(uid,session_id,'user',text)
-            return {'id':aid,'filename':filename,'text':text}
+                conn.execute('INSERT INTO artifacts VALUES(?,?,?,?,?,?)',(aid,uid,run_id,str(path),filename,media))
+                mid=conn.execute("INSERT INTO messages(session_id,role,content,created) VALUES(?,'user',?,?)",(session_id,text,time.time())).lastrowid
+                conn.execute('INSERT INTO message_attachments VALUES(?,?)',(mid,aid))
+            return {**attachment_view({'id':aid,'filename':filename,'media':media}),'text':text,'message_id':mid}
         except BaseException:
             path.unlink(missing_ok=True)
             raise

@@ -17,3 +17,6 @@ htmlcov/
 *.log
 *.pem
 *.key
+
+*.zip
+.venv*/

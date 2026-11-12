@@ -44,18 +44,45 @@ async function api(path, method='GET', body) {
   return response.json();
 }
 function error(e) {if(e?.silent)return;$('error').textContent=e?.message||'';}
-function links(node, text) {
-  node._messageText=text;
-  node.replaceChildren();
-  // Render only text and HTTP(S) links. Never execute model-provided HTML.
-  const pattern=/\[([^\]\n]{1,300})\]\((https?:\/\/[^\s)]+)\)/g;
+function inlineText(node, text) {
+  // Build a small Markdown subset with DOM nodes; model HTML stays literal text.
+  const pattern=/\[([^\]\n]{1,300})\]\((https?:\/\/[^\s)]+)\)|\*\*([^*\n]+)\*\*|`([^`\n]+)`/g;
   let last=0, match;
   while ((match=pattern.exec(text))) {
     node.append(document.createTextNode(text.slice(last, match.index)));
-    const a=document.createElement('a'); a.textContent=match[1]; a.href=match[2]; a.target='_blank'; a.rel='noopener noreferrer'; node.append(a);
+    if(match[1]) {
+      const a=document.createElement('a'); inlineText(a,match[1]); a.href=match[2]; a.target='_blank'; a.rel='noopener noreferrer'; node.append(a);
+    } else {
+      const span=document.createElement(match[3]?'strong':'code');span.textContent=match[3]||match[4];node.append(span);
+    }
     last=pattern.lastIndex;
   }
   node.append(document.createTextNode(text.slice(last)));
+}
+function links(node, text) {
+  node._messageText=text;
+  node.replaceChildren();
+  if(!node.classList.contains('assistant')){inlineText(node,text);return;}
+  let paragraph=null,list=null,code=null;
+  for(const line of text.replace(/\r\n?/g,'\n').split('\n')) {
+    if(/^\s*```/.test(line)) {
+      if(code){code=null;}else{const pre=document.createElement('pre');code=document.createElement('code');pre.append(code);node.append(pre);}
+      paragraph=null;list=null;continue;
+    }
+    if(code){code.append(document.createTextNode((code.childNodes.length?'\n':'')+line));continue;}
+    if(!line.trim()){paragraph=null;list=null;continue;}
+    const bullet=line.match(/^\s*(?:[-*+•]\s+|#{1,6}\s+)(.+)$/);
+    const ordered=line.match(/^\s*(\d+)[.)]\s+(.+)$/);
+    if(bullet||ordered) {
+      const tag=ordered?'ol':'ul';
+      if(!list||list.tagName.toLowerCase()!==tag){list=document.createElement(tag);if(ordered)list.start=Number(ordered[1]);node.append(list);}
+      const item=document.createElement('li');inlineText(item,bullet?bullet[1]:ordered[2]);list.append(item);paragraph=null;
+    } else {
+      list=null;
+      if(!paragraph){paragraph=document.createElement('p');node.append(paragraph);}else{paragraph.append(document.createTextNode('\n'));}
+      inlineText(paragraph,line);
+    }
+  }
 }
 function message(role, text, follow=true) {
   const stick=follow&&(role==='user'||atBottom());
@@ -64,6 +91,18 @@ function message(role, text, follow=true) {
   if(stick)scrollLatest();return node;
 }
 function updateAnswer(node,text){const stick=atBottom();links(node,text);if(stick)scrollLatest();}
+function renderAttachments(node,attachments=[]){
+  if(!attachments.length)return;
+  node.replaceChildren();node.classList.add('upload-message');
+  for(const file of attachments){
+    // URLs are constructed from authenticated artifact IDs, never model text.
+    if(!/^[a-f0-9]{32}$/.test(file.id))continue;
+    const link=document.createElement('a');link.href='/api/artifacts/'+file.id;link.target='_blank';link.rel='noopener';
+    if(file.image){const image=document.createElement('img');image.src=link.href;image.alt=file.filename;image.loading='lazy';link.append(image);}
+    const name=document.createElement('span');name.className='attachment-name';name.textContent=file.filename;link.append(name);node.append(link);
+    if(file.image){const hint=document.createElement('span');hint.className='attachment-hint';hint.textContent='Ask a question about this image below.';node.append(hint);}
+  }
+}
 function renderMessages(rows,refresh){
   if(!refresh)$('messages').replaceChildren();
   const existing=Array.from($('messages').children),used=new Set();
@@ -74,6 +113,7 @@ function renderMessages(rows,refresh){
     if(!node)node=message(row.role,row.content,false);
     else if(node._messageText!==row.content)links(node,row.content);
     node.dataset.messageId=row.id;used.add(node);
+    renderAttachments(node,row.attachments);
   }
   for(const node of existing)if(!used.has(node)&&!node.dataset.artifact)node.remove();
   return known;
@@ -280,21 +320,33 @@ $('password-form').onsubmit=async e=>{e.preventDefault();try{await api('/passwor
 for(const id of ['username','password','current-password','new-password'])$(id).addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();e.target.form.requestSubmit();}});
 $('input').oninput=()=>{$('input').style.height='auto';$('input').style.height=Math.min($('input').scrollHeight,170)+'px';};
 $('input').addEventListener('dragover',e=>{if(e.dataTransfer?.types.includes('Files'))e.preventDefault();});
-$('input').addEventListener('drop',async e=>{
-  const files=Array.from(e.dataTransfer?.files||[]);if(!files.length)return;e.preventDefault();
+let uploadBusy=false;
+async function uploadFiles(files){
+  if(!files.length||uploadBusy)return;
   const destination=session,generation=navigation;
-  $('input').disabled=true;error(null);
+  uploadBusy=true;$('attach').disabled=true;$('input').disabled=true;error(null);
   try{
     if(!account||!destination)throw new Error('Log in and open a chat first.');
     for(const file of files){
+      if(generation!==navigation)break;
       if(file.size>50000000)throw new Error('Each file must be at most 50 MB.');
       $('status').textContent='Uploading '+file.name+'…';
       const response=await fetch('/api/uploads?session_id='+encodeURIComponent(destination),{method:'POST',headers:{'Content-Type':'application/octet-stream','X-Filename':encodeURIComponent(file.name)},body:file});
       if(!response.ok)throw new Error('Upload failed: '+await response.text());
       const result=await response.json();
-      if(generation===navigation)message('user',result.text);
+      if(generation===navigation){const node=message('user',result.text);if(result.message_id)node.dataset.messageId=result.message_id;if(result.id&&result.filename)renderAttachments(node,[result]);scrollLatest();}
     }
-  }catch(e){error(e);}finally{if(generation===navigation){$('status').textContent='';$('input').disabled=false;$('input').focus();}}
+  }catch(e){if(generation===navigation)error(e);}finally{uploadBusy=false;$('attach').disabled=false;if(generation===navigation){$('status').textContent='';$('input').disabled=false;$('input').focus();}}
+}
+$('attach').onclick=()=>{if(!uploadBusy&&!$('input').disabled)$('file-picker').click();};
+$('file-picker').onchange=()=>{
+  const files=Array.from($('file-picker').files||[]);
+  $('file-picker').value='';
+  uploadFiles(files);
+};
+$('input').addEventListener('drop',e=>{
+  const files=Array.from(e.dataTransfer?.files||[]);if(!files.length)return;e.preventDefault();
+  uploadFiles(files);
 });
 $('input').onkeydown=async e=>{
   if(e.key!=='Enter'||e.shiftKey||e.isComposing)return;e.preventDefault();const text=$('input').value.trim();if(!text)return;
