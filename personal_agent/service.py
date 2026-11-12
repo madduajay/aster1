@@ -72,12 +72,22 @@ class Service:
                 await self._cancel(user, active['id'], 'Started a new chat.')
             return self.db.new_session(user)
 
-    async def submit(self, user, session, text, pending_input_id=None):
+    async def submit(self, user, session, text, pending_input_id=None, attachment_ids=None):
         async with self.user_lock(user):
-            return await self._submit(user, session, text, pending_input_id)
+            return await self._submit(user, session, text, pending_input_id, attachment_ids)
 
-    async def _submit(self, user, session, text, pending_input_id=None):
+    async def _submit(self, user, session, text, pending_input_id=None, attachment_ids=None):
         self.db.owned_session(user, session)
+        attachment_ids=list(attachment_ids or [])
+        if len(attachment_ids)>10 or len(set(attachment_ids))!=len(attachment_ids):
+            raise ValueError('Attach up to ten different files.')
+        if attachment_ids and (text.startswith('/') or pending_input_id):
+            raise ValueError('Send attachments with a new question, rather than a command or paused-task reply.')
+        for aid in attachment_ids:
+            if not self.db.one('''SELECT a.id FROM artifacts a JOIN runs r ON r.id=a.run_id
+                WHERE a.id=? AND a.user_id=? AND r.session_id=?
+                AND NOT EXISTS (SELECT 1 FROM message_attachments WHERE artifact_id=a.id)''',(aid,user,session)):
+                raise ValueError('An attachment is unavailable or already sent. Select it again.')
         active = self.active(user)
         if active:
             if text.strip() == '/stop':
@@ -105,7 +115,9 @@ class Service:
             await self._cancel(user, active['id'], 'Replaced by a new request.')
         elif pending_input_id:
             raise LookupError('Pending input not found')
-        mid = self.db.message(user, session, 'user', text)
+        with self.db.connect() as conn:
+            mid=conn.execute("INSERT INTO messages(session_id,role,content,created) VALUES(?,'user',?,?)",(session,text,time.time())).lastrowid
+            conn.executemany('INSERT INTO message_attachments VALUES(?,?)',[(mid,aid) for aid in attachment_ids])
         self.memory.save_declared_name(user, session, mid)
         title = self.db.owned_session(user, session)['title']
         if title == 'New chat':
@@ -265,6 +277,11 @@ class Service:
             latest = current['content']
             context['current_user_message'] = current
             context['session_id'] = session
+            context['attached_files']=self.db.rows('''SELECT a.id,a.filename,a.media FROM message_attachments ma
+                JOIN artifacts a ON a.id=ma.artifact_id JOIN messages m ON m.id=ma.message_id
+                WHERE a.user_id=? AND m.session_id=? AND m.id>?
+                AND m.id NOT IN (SELECT message_id FROM context_exclusions)
+                ORDER BY m.id DESC,ma.rowid DESC LIMIT 10''',(user,session,self.db.owned_session(user,session)['context_floor']))
             context['clock'] = clock_context()
             context['unsummarized_messages'] = [m for m in context['unsummarized_messages'] if m['id'] != current['id']]
             context['recent_messages'] = [m for m in context['recent_messages'] if m['id'] != current['id']]

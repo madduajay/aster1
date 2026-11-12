@@ -45,6 +45,7 @@ class Turn(BaseModel):
     pending_input_id: str | None = Field(default=None, max_length=64)
     session_id: str
     text: str = Field(min_length=1, max_length=16000)
+    attachment_ids: list[str] = Field(default_factory=list, max_length=10)
 
 
 class Approval(BaseModel):
@@ -256,7 +257,7 @@ def create_app(database=None, service=None):
 
     @app.post('/api/runs')
     async def run(body: Turn, request: Request, uid=Depends(user)):
-        return await request.app.state.service.submit(uid, body.session_id, body.text.strip(), pending_input_id=body.pending_input_id)
+        return await request.app.state.service.submit(uid, body.session_id, body.text.strip(), pending_input_id=body.pending_input_id, attachment_ids=body.attachment_ids)
 
     @app.get('/api/runs/{rid}')
     def run_status(rid: str, request: Request, uid=Depends(user)):
@@ -397,7 +398,7 @@ def create_app(database=None, service=None):
                             content_disposition_type='inline' if row['media'] in IMAGE_MEDIA else 'attachment')
 
     @app.post('/api/uploads')
-    async def upload(request: Request, session_id: str, uid=Depends(user)):
+    async def upload(request: Request, session_id: str, draft: bool = False, uid=Depends(user)):
         database = db(request)
         database.owned_session(uid, session_id)
         if request.app.state.service.active(uid):
@@ -426,8 +427,10 @@ def create_app(database=None, service=None):
             with database.connect() as conn:
                 conn.execute("INSERT INTO runs(id,user_id,session_id,status,created) VALUES(?,?,?,'completed',?)",(run_id,uid,session_id,time.time()))
                 conn.execute('INSERT INTO artifacts VALUES(?,?,?,?,?,?)',(aid,uid,run_id,str(path),filename,media))
-                mid=conn.execute("INSERT INTO messages(session_id,role,content,created) VALUES(?,'user',?,?)",(session_id,text,time.time())).lastrowid
-                conn.execute('INSERT INTO message_attachments VALUES(?,?)',(mid,aid))
+                mid=None
+                if not draft:
+                    mid=conn.execute("INSERT INTO messages(session_id,role,content,created) VALUES(?,'user',?,?)",(session_id,text,time.time())).lastrowid
+                    conn.execute('INSERT INTO message_attachments VALUES(?,?)',(mid,aid))
             return {**attachment_view({'id':aid,'filename':filename,'media':media}),'text':text,'message_id':mid}
         except BaseException:
             path.unlink(missing_ok=True)

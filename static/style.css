@@ -38,8 +38,16 @@ h1{font-family:inherit;font-weight:500;letter-spacing:-1.4px}
 footer{padding-top:24px;background:linear-gradient(transparent,var(--paper) 24%)}
 #input{border-radius:28px;border-color:#e2e5e9;min-height:64px;box-shadow:0 4px 24px #2027350a;padding:19px 23px}
 #input::placeholder{color:#8c9199}
-.composer-field{position:relative}
-.composer-field #input{padding-left:58px}
+.composer-field{position:relative;background:#fff;border:1px solid #e2e5e9;border-radius:28px;box-shadow:0 4px 24px #2027350a}
+.composer-field:focus-within{outline:2px solid var(--green);outline-offset:3px}
+.composer-field #input{padding-left:58px;background:transparent;border:0;box-shadow:none;outline:none}
+#draft-attachments{display:flex;gap:10px;padding:14px 14px 0;overflow-x:auto;max-height:150px}
+.draft-file{position:relative;flex:0 0 100px;min-width:0;padding:6px;background:#f5f6f8;border:1px solid var(--line);border-radius:14px}
+.draft-file img{display:block;width:86px;height:72px;object-fit:cover;border-radius:9px}
+.draft-file>span:last-of-type{display:block;max-width:86px;margin-top:5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px}
+.draft-file-icon{display:grid;place-items:center;height:72px;color:var(--muted);font-size:13px}
+.draft-file button{position:absolute;right:0;top:0;width:28px;height:28px;padding:0;display:grid;place-items:center;border-radius:50%;font-size:22px;line-height:1;background:#fff;box-shadow:0 2px 6px #0001}
+.draft-file button:disabled{opacity:.5;cursor:wait}
 #attach{position:absolute;left:10px;bottom:10px;display:grid;place-items:center;width:44px;height:44px;padding:0;border:0;border-radius:50%;background:transparent;box-shadow:none;font-size:29px;line-height:1;color:var(--ink)}
 #attach:hover{background:#edf0f3}
 #attach:disabled{opacity:.4;cursor:wait}
@@ -47,6 +55,7 @@ footer{padding-top:24px;background:linear-gradient(transparent,var(--paper) 24%)
 .upload-message>a{display:block;text-decoration:none}
 .upload-message img{width:100%;max-height:260px;object-fit:contain;border-radius:14px;margin:0 0 8px;background:#f6f7f8}
 .attachment-name{display:block;padding:2px 5px;font-size:13px;overflow-wrap:anywhere}
+.attachment-question{padding:3px 5px 10px;white-space:pre-wrap}
 .attachment-hint{display:block;padding:3px 5px;color:var(--muted);font-size:12px}
 #error:empty{display:none}
 #error{border-radius:10px;padding:5px 10px;background:#fff}
@@ -62,3 +71,4 @@ footer{padding-top:24px;background:linear-gradient(transparent,var(--paper) 24%)
   .message.assistant>ul,.message.assistant>ol{padding:13px 16px 13px 34px;border-radius:17px}
   .message.user{max-width:90%}
 }
+main{padding-bottom:var(--composer-space,210px)}

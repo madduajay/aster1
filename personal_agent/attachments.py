@@ -25,7 +25,7 @@ def image_blocks(db, user, session):
         WHERE a.user_id=? AND m.session_id=? AND m.id>?
         AND m.id NOT IN (SELECT message_id FROM context_exclusions)
         AND a.media IN ('image/png','image/jpeg','image/webp','image/gif')
-        ORDER BY m.id DESC LIMIT 4''', (user, session, owned['context_floor']))
+        ORDER BY m.id DESC,ma.rowid DESC LIMIT 4''', (user, session, owned['context_floor']))
     blocks = []
     total = 0
     for row in rows:

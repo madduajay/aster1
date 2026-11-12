@@ -4,6 +4,7 @@ let account = null, session = null, feed = null, answer = null, liveText = '', m
 let browserTimer=null,browserWatch=0;
 let takeoverTail=Promise.resolve();
 let scrollFrame=null,scrollIntent=0;
+let draftFiles=[];
 const atBottom=()=>document.documentElement.scrollHeight-innerHeight-scrollY<40;
 function scrollLatest(){
   if(scrollFrame!==null)return;
@@ -94,13 +95,13 @@ function updateAnswer(node,text){const stick=atBottom();links(node,text);if(stic
 function renderAttachments(node,attachments=[]){
   if(!attachments.length)return;
   node.replaceChildren();node.classList.add('upload-message');
+  if(!node._messageText.startsWith('Uploaded file:')){const question=document.createElement('div');question.className='attachment-question';question.textContent=node._messageText;node.append(question);}
   for(const file of attachments){
     // URLs are constructed from authenticated artifact IDs, never model text.
     if(!/^[a-f0-9]{32}$/.test(file.id))continue;
     const link=document.createElement('a');link.href='/api/artifacts/'+file.id;link.target='_blank';link.rel='noopener';
     if(file.image){const image=document.createElement('img');image.src=link.href;image.alt=file.filename;image.loading='lazy';link.append(image);}
     const name=document.createElement('span');name.className='attachment-name';name.textContent=file.filename;link.append(name);node.append(link);
-    if(file.image){const hint=document.createElement('span');hint.className='attachment-hint';hint.textContent='Ask a question about this image below.';node.append(hint);}
   }
 }
 function renderMessages(rows,refresh){
@@ -119,6 +120,7 @@ function renderMessages(rows,refresh){
   return known;
 }
 function signedOut() {
+  clearDraftFiles();
   clearBrowser();
   navigation++;feed?.close(); feed=null; account=null;session=null;mode='login';pendingApproval=null;
   $('messages').replaceChildren();$('chat').hidden=true;$('composer').hidden=true;$('login').hidden=false;
@@ -139,6 +141,7 @@ async function entered(me) {
 }
 async function openSession(id,{refresh=false}={}) {
   refresh=refresh&&id===session;
+  if(!refresh&&id!==session)clearDraftFiles();
   if(!refresh)clearBrowser();
   const generation=++navigation; feed?.close();feed=null;pendingApproval=null;stopBrowserControl();pendingInput=null;document.body.classList.remove('takeover');if(!refresh)$('input').disabled=true;
   let result;
@@ -321,50 +324,72 @@ for(const id of ['username','password','current-password','new-password'])$(id).
 $('input').oninput=()=>{$('input').style.height='auto';$('input').style.height=Math.min($('input').scrollHeight,170)+'px';};
 $('input').addEventListener('dragover',e=>{if(e.dataTransfer?.types.includes('Files'))e.preventDefault();});
 let uploadBusy=false;
-async function uploadFiles(files){
-  if(!files.length||uploadBusy)return;
-  const destination=session,generation=navigation;
-  uploadBusy=true;$('attach').disabled=true;$('input').disabled=true;error(null);
+function clearDraftFiles(){for(const item of draftFiles)if(item.preview)URL.revokeObjectURL(item.preview);draftFiles=[];renderDraftFiles();}
+function renderDraftFiles(){
+  const tray=$('draft-attachments');tray.replaceChildren();tray.hidden=!draftFiles.length;
+  for(const item of draftFiles){
+    const card=document.createElement('div');card.className='draft-file';
+    if(item.preview){const image=document.createElement('img');image.src=item.preview;image.alt=item.file.name;card.append(image);}
+    else{const icon=document.createElement('span');icon.className='draft-file-icon';icon.textContent='File';card.append(icon);}
+    const name=document.createElement('span');name.textContent=item.file.name;name.title=item.file.name;card.append(name);
+    const remove=document.createElement('button');remove.type='button';remove.textContent='×';remove.setAttribute('aria-label','Remove '+item.file.name);remove.disabled=uploadBusy;
+    remove.onclick=()=>{if(item.preview)URL.revokeObjectURL(item.preview);draftFiles=draftFiles.filter(f=>f!==item);renderDraftFiles();$('input').focus();};card.append(remove);tray.append(card);
+  }
+}
+function stageFiles(files){
+  if(uploadBusy)return;
+  error(null);
   try{
-    if(!account||!destination)throw new Error('Log in and open a chat first.');
+    if(!account||!session)throw new Error('Log in and open a chat first.');
+    if(draftFiles.length+files.length>10)throw new Error('Attach up to ten files at a time.');
     for(const file of files){
-      if(generation!==navigation)break;
-      if(file.size>50000000)throw new Error('Each file must be at most 50 MB.');
-      $('status').textContent='Uploading '+file.name+'…';
-      const response=await fetch('/api/uploads?session_id='+encodeURIComponent(destination),{method:'POST',headers:{'Content-Type':'application/octet-stream','X-Filename':encodeURIComponent(file.name)},body:file});
-      if(!response.ok)throw new Error('Upload failed: '+await response.text());
-      const result=await response.json();
-      if(generation===navigation){const node=message('user',result.text);if(result.message_id)node.dataset.messageId=result.message_id;if(result.id&&result.filename)renderAttachments(node,[result]);scrollLatest();}
+      const image=['image/png','image/jpeg','image/webp','image/gif'].includes(file.type);
+      if(file.size>(image?20000000:50000000))throw new Error(image?'Images must be at most 20 MB.':'Each file must be at most 50 MB.');
+      draftFiles.push({file,preview:image?URL.createObjectURL(file):null,result:null});
     }
-  }catch(e){if(generation===navigation)error(e);}finally{uploadBusy=false;$('attach').disabled=false;if(generation===navigation){$('status').textContent='';$('input').disabled=false;$('input').focus();}}
+  }catch(e){error(e);}
+  renderDraftFiles();$('input').focus();
+}
+async function uploadDraftFiles(destination){
+  for(const item of draftFiles){
+    if(item.result)continue;
+    $('status').textContent='Uploading '+item.file.name+'…';
+    const response=await fetch('/api/uploads?draft=true&session_id='+encodeURIComponent(destination),{method:'POST',headers:{'Content-Type':'application/octet-stream','X-Filename':encodeURIComponent(item.file.name)},body:item.file});
+    if(!response.ok)throw new Error('Upload failed: '+await response.text());
+    item.result=await response.json();
+  }
+  return draftFiles.map(item=>item.result.id);
 }
 $('attach').onclick=()=>{if(!uploadBusy&&!$('input').disabled)$('file-picker').click();};
 $('file-picker').onchange=()=>{
   const files=Array.from($('file-picker').files||[]);
   $('file-picker').value='';
-  uploadFiles(files);
+  stageFiles(files);
 };
 $('input').addEventListener('drop',e=>{
   const files=Array.from(e.dataTransfer?.files||[]);if(!files.length)return;e.preventDefault();
-  uploadFiles(files);
+  stageFiles(files);
 });
 $('input').onkeydown=async e=>{
-  if(e.key!=='Enter'||e.shiftKey||e.isComposing)return;e.preventDefault();const text=$('input').value.trim();if(!text)return;
+  if(e.key!=='Enter'||e.shiftKey||e.isComposing)return;e.preventDefault();const text=$('input').value.trim();if(!text||uploadBusy)return;
   $('input').value='';$('input').style.height='auto';error(null);
   try{
-    if(text.startsWith('/open ')){await openSession(text.slice(6).trim());return;}
-    if(pendingApproval&&/^(approve|cancel|reject)$/i.test(text)){await respondToApproval(pendingApproval,text.toLowerCase()==='approve'?'approve':'reject');return;}
-    if(pendingInput&&/^(?:cancel|stop|\/stop)$/i.test(text)){await cancelInput(pendingInput);return;}
-    const inputId=pendingInput?.id;
+    if(!draftFiles.length&&text.startsWith('/open ')){await openSession(text.slice(6).trim());return;}
+    if(!draftFiles.length&&pendingApproval&&/^(approve|cancel|reject)$/i.test(text)){await respondToApproval(pendingApproval,text.toLowerCase()==='approve'?'approve':'reject');return;}
+    if(!draftFiles.length&&pendingInput&&/^(?:cancel|stop|\/stop)$/i.test(text)){await cancelInput(pendingInput);return;}
+    const inputId=draftFiles.length?null:pendingInput?.id;
     // Detach the old event stream before cancellation can emit its final event.
     // Otherwise that event can reload the old run over the replacement stream.
-    ++navigation;feed?.close();feed=null;$('input').disabled=true;$('new').disabled=true;
+    ++navigation;feed?.close();feed=null;uploadBusy=true;$('attach').disabled=true;$('input').disabled=true;$('new').disabled=true;renderDraftFiles();
     try{
-      await api('/runs','POST',{session_id:session,text,pending_input_id:inputId||null});
+      const attachmentIds=await uploadDraftFiles(session);
+      await api('/runs','POST',{session_id:session,text,pending_input_id:inputId||null,attachment_ids:attachmentIds});
+      clearDraftFiles();
       clearBrowser();pendingApproval=null;await openSession(session,{refresh:true});
     }catch(e){await openSession(session,{refresh:true});throw e;}
-    finally{$('input').disabled=false;$('new').disabled=false;}
+    finally{uploadBusy=false;$('attach').disabled=false;$('input').disabled=false;$('new').disabled=false;renderDraftFiles();}
 
   }catch(e){error(e);if(account)$('input').value=text;}
 };
 api('/me').then(entered).catch(()=>signedOut());
+new ResizeObserver(()=>{document.documentElement.style.setProperty('--composer-space',($('composer').hidden?170:$('composer').offsetHeight+32)+'px');}).observe($('composer'));
