@@ -2,7 +2,7 @@
 
 A local personal agent for macOS, built with FastAPI, DeepAgents/LangGraph, OpenAI, Browser Use, SQLite and a vanilla JavaScript chat UI.
 
-This branch contains the runtime application and setup files only. Tests, validation scripts, local databases, account passwords, API keys, TLS material, browser profiles, uploads, logs, ZIP archives and virtual environments are excluded.
+This checkout includes application source, setup files, tests and validation scripts. Private runtime data, passwords, API keys, browser profiles, logs, archives and virtual environments are ignored by Git.
 
 ## Requirements
 
@@ -57,7 +57,7 @@ Open **https://aster.localhost:55468**. Setup provisions ten local accounts, `us
 
 ## Chat and images
 
-The UI supports formatted response cards, short answers by default, browser preview and manual takeover, and action approval cards. Click **+** in the composer to select files, or drag and drop them. Image thumbnails stay inside the message box while you type your question. Remove an attachment with its × button, or press Enter to send the images and question together as one message. Files are uploaded only when you send; a failed send preserves the question and attachments for retry. Sent image previews remain visible when reopening the chat. PNG, JPEG, WebP and GIF are recognized. General files have a 50 MB limit; images have a 20 MB limit, with up to four recent images supplied to the model within a combined 20 MB budget. Generic documents are available for approved website uploads; general document parsing is not included.
+The UI supports formatted response cards, short answers by default, browser preview and manual takeover, and action approval cards. Recommendations automatically trigger web research, including follow-up requests. Click **+** in the composer to select files, or drag and drop them. Image thumbnails stay inside the message box while you type your question. Remove an attachment with its × button, or press Enter to send the images and question together as one message. Files are uploaded only when you send; a failed send preserves the question and attachments for retry. Sent image previews remain visible when reopening the chat. PNG, JPEG, WebP and GIF are recognized. General files have a 50 MB limit; images have a 20 MB limit, with up to four recent images supplied to the model within a combined 20 MB budget. Generic documents are available for approved website uploads; general document parsing is not included.
 
 Sessions and persistent preferences are separate. Useful commands include `/sessions`, `/open SESSION_ID`, `/files`, `/memory`, `/remember TEXT`, `/forget ID`, `/forget all`, `/correct ID TEXT`, `/debug` and `/stop`. Private website credentials and verification codes belong in the interactive browser takeover, not chat. Consequential browser actions require their displayed approval.
 
@@ -68,3 +68,26 @@ Model defaults, the local origin and timezone are in `personal_agent/config.py`.
 All local state is under `.runtime/`, including SQLite data, user profiles, uploads, TLS files, and logs. Back it up separately while the app is stopped if you need to preserve accounts and conversations. The repository alone does not contain that state. The launcher expects to manage the process from this checkout; stop an instance in a different checkout before starting this one.
 
 `tunnel.py` is included for optional ngrok access. To enable it, install the official ngrok executable locally at `.runtime/bin/ngrok`, place its authtoken in the owner-only `.runtime/ngrok-token.txt`, then run `.venv/bin/python tunnel.py start` and restart the app. Stop the tunnel with `.venv/bin/python tunnel.py stop`, then restart the app to remove its public origin. This is optional; the local URL works independently.
+
+## Models and research
+
+- GPT-5.4 mini: chat, image questions, memory, research routing and web search. Chat uses the Responses API with low reasoning effort.
+- GPT-6.1 Terra: browser planning and independent browser outcome verification.
+- Model requests retry transient connection failures, rate limits and server errors up to twice using SDK exponential backoff. Authentication and invalid requests fail immediately. Retries do not replay browser actions or restart a partially consumed stream. Per-request timeouts remain 45 seconds (40 for the browser planner), within existing task deadlines.
+- Provider facts, prices, availability, policies and transaction details use official sources. Reputable independent reviews, reporting and comparisons are allowed as a separately labeled research mode, constrained to selected publisher domains. Unchecked links remain visible with an unverified label.
+
+## Development and verification
+
+```sh
+.venv/bin/python -m pytest -q
+RUN_BROWSER_TESTS=1 .venv/bin/python -m pytest -q
+```
+
+Browser tests use isolated accounts and synthetic services. Live acceptance scripts can call paid models; read their caps and scope before running them. The old pytest failure cache can contain names of tests that were renamed; current test output is authoritative.
+
+Local Git tracks source and tests. `_to_delete/` is an ignored review area for old test artifacts, archives and snapshots; its cleanup manifest records their original paths and hashes. Nothing is permanently removed by the maintenance cleanup.
+
+- [Architecture](docs/ARCHITECTURE.md) — main components and boundaries.
+- [Changelog](docs/CHANGELOG.md) — recent changes.
+- [Historical implementation notes](docs/HISTORY.md) — archived former README.
+- [Historical verification report](docs/VERIFICATION.md) — retained prior validation evidence.

@@ -203,7 +203,7 @@ async def main():
             self.calls+=1
             if self.calls>init.get('model_call_limit',30):raise RuntimeError('Browser model budget reached')
             return await super().ainvoke(*args,**kwargs)
-    llm=BudgetModel(model=init['model'],api_key=init.pop('key'),base_url='https://api.openai.com/v1',timeout=40,max_retries=0,max_completion_tokens=4096,**browser_model_options(init['model']))
+    llm=BudgetModel(model=init['model'],api_key=init.pop('key'),base_url='https://api.openai.com/v1',timeout=40,max_retries=init.get('model_max_retries',2),max_completion_tokens=4096,**browser_model_options(init['model']))
     browser=resilient_browser(Browser)(cdp_url=init['cdp_url'],keep_alive=True,allowed_domains=init['allowed_domains'],
         enable_default_extensions=False,captcha_solver=False,auto_download_pdfs=False,cross_origin_iframes=True,highlight_elements=False,permissions=[],
         downloads_path=str(Path(init['workspace'])/'downloads'))

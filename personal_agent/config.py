@@ -6,9 +6,11 @@ import json
 ROOT = Path(__file__).resolve().parent.parent
 RUNTIME = Path(os.environ.get("PERSONAL_AGENT_RUNTIME", ROOT / ".runtime"))
 ORIGIN = "https://aster.localhost:55468"
-MODEL = "gpt-4.1-mini"
+MODEL = "gpt-5.4-mini"
 SEARCH_MODEL = "gpt-5.4-mini"
 BROWSER_MODEL = os.environ.get('PERSONAL_AGENT_BROWSER_MODEL', 'gpt-6.1-terra')
+VERIFICATION_MODEL = "gpt-6.1-terra"
+MODEL_MAX_RETRIES = 2
 BROWSER_HEADLESS = os.environ.get('PERSONAL_AGENT_BROWSER_HEADLESS','1')!='0'
 TIMEZONE = os.environ.get('PERSONAL_AGENT_TIMEZONE', 'America/Phoenix')
 

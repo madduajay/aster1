@@ -156,7 +156,7 @@ class BrowserTasks:
             await self.send(tid,{'nonce':nonce,'key':self.key,'model':config.BROWSER_MODEL,'cdp_url':endpoint,
                 'task':objective+('\nUser-owned files authorized for this task: '+json.dumps(files) if files else ''),
                 'available_file_paths':[f['path'] for f in files],
-                'workspace':str(workspace),'allowed_domains':[p for d in getattr(self.browsers,'scopes',{}).get((user,run),domains) for p in [d,'*.'+d]],
+                'workspace':str(workspace),'model_max_retries':config.MODEL_MAX_RETRIES,'allowed_domains':[p for d in getattr(self.browsers,'scopes',{}).get((user,run),domains) for p in [d,'*.'+d]],
                 'instructions':instructions,'max_steps':30,'model_call_limit':40,'start_seq':start_seq,'used_calls':existing['model_calls'] if existing else 0,
                 'uncertain_submission':bool(self.db.one("SELECT id FROM browser_use_actions WHERE task_id=? AND category IN ('approval','mutation') AND status='unknown'",(tid,)))})
             self.workers[tid].pump=asyncio.create_task(self.pump(tid))

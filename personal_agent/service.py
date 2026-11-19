@@ -11,7 +11,7 @@ from langgraph.types import Command
 
 from .agent import text_content
 from .memory import Memory, TEMPORARY, fact_context, safe_fact
-from .sources import evidence_sources, vetted_text
+from .sources import evidence_sources, vetted_text, unverified_link_candidates
 from .clock import clock_context
 from .approvals import approval_text
 from .browser_recovery import input_text
@@ -42,7 +42,8 @@ class Service:
 
     def unverified_research(self, run, sources):
         usage = self.db.one('SELECT searches FROM run_usage WHERE run_id=?', (run,))
-        return bool(usage and usage['searches'] and not sources)
+        required=self.db.one("SELECT id FROM events WHERE run_id=? AND kind='research_required' LIMIT 1",(run,))
+        return bool(not sources and ((usage and usage['searches']) or required))
 
     def browser_outcome(self,user,run,text):
         if self.db.one("SELECT name FROM sqlite_master WHERE type='table' AND name='browser_use_tasks'"):
@@ -303,7 +304,7 @@ class Service:
                     async for mode, event in stream:
                         if mode == 'messages':
                             chunk, metadata = event
-                            if isinstance(chunk, AIMessageChunk) and metadata.get('langgraph_node') == 'model':
+                            if isinstance(chunk, AIMessageChunk) and metadata.get('langgraph_node') == 'model' and 'research_router' not in metadata.get('tags',[]):
                                 text = text_content(chunk.content)
                                 if text:
                                     buffer += text
@@ -342,7 +343,9 @@ class Service:
             buffer = self.browser_outcome(user,run,buffer)
             buffer = vetted_text(buffer, sources)
             if self.unverified_research(run, sources):
-                buffer = "I couldn't verify information from the official website for this request. I won't use other websites as substitutes."
+                note="I couldn't verify information from the selected sources for this request. Any links below are unverified; prices and availability are not confirmed."
+                candidates=unverified_link_candidates(buffer)
+                buffer = note + ('\n\n'+vetted_text(candidates,[]) if candidates else '')
                 self.db.event(run, 'token', buffer)
             elif pending:
                 clean = vetted_text(pending, sources, empty_fallback=False)

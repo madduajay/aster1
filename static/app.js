@@ -54,7 +54,7 @@ function inlineText(node, text) {
     if(match[1]) {
       const a=document.createElement('a'); inlineText(a,match[1]); a.href=match[2]; a.target='_blank'; a.rel='noopener noreferrer'; node.append(a);
     } else {
-      const span=document.createElement(match[3]?'strong':'code');span.textContent=match[3]||match[4];node.append(span);
+      const span=document.createElement(match[3]?'strong':'code');if(match[3])inlineText(span,match[3]);else span.textContent=match[4];node.append(span);
     }
     last=pattern.lastIndex;
   }
