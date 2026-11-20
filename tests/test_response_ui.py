@@ -1,6 +1,7 @@
 """Render streamed and saved responses without interpreting untrusted HTML."""
 import os
 import json
+from urllib.parse import urlsplit
 
 import pytest
 from playwright.async_api import async_playwright, expect
@@ -18,7 +19,7 @@ async def test_response_cards_lists_and_safe_formatting(monkeypatch, tmp_path):
         page.on('pageerror', lambda e: errors.append(str(e)))
 
         async def serve(route):
-            path = route.request.url.split('aster.test', 1)[1]
+            path = urlsplit(route.request.url).path
             if path.startswith('/api/'):
                 await route.fulfill(status=401, content_type='application/json', body='{}')
             else:

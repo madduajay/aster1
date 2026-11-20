@@ -90,6 +90,8 @@ def start():
     current = owner()
     if current and current[1] == config.ROOT.resolve():
         print('Personal agent already owns port 55468.'); return
+    from dining_stack import start as start_dining
+    start_dining()
     # Resolve native credential access before stopping the old application.
     key = config.keychain_key()
     stop(allow_old=True)

@@ -13,6 +13,27 @@ URL_MUTATION=re.compile(r'(?:^|[/=?&_-])(?:add|delete|remove|submit|send|publish
 UI_ONLY=re.compile(r'^(?:(?:open|close|toggle)\s+)?(?:menu|navigation|search|filters?|sort|details?|size\s+(?:guide|chart)|gallery|photos?|images?|zoom|next\s+(?:photo|image)|previous\s+(?:photo|image))$|^(?:show|view|hide)\s+(?:more|less|details|filters|options)$',re.I)
 PREPARATION_CONTROL=re.compile(r'^(?:choose|select|show|view|expand|collapse|open|close|toggle|filter|sort|zoom)\b|^(?:more\s+)?(?:product\s+)?details$|^(?:next|previous)\s+(?:page|image|photo)$',re.I)
 PRIVATE=re.compile(r'sk-[A-Za-z0-9_-]{12,}|\b(?:\d[ -]?){13,19}\b')
+PUBLIC_ATTRIBUTES=frozenset({
+    'href','src','alt','target','rel','download','action','method','form','formaction',
+    'aria-label','aria-labelledby','aria-describedby','aria-description','aria-selected',
+    'aria-checked','aria-disabled','aria-haspopup','aria-expanded','aria-controls','aria-current',
+    'aria-modal','aria-hidden','aria-required','aria-invalid','title','name','type','id','class',
+    'checked','selected','disabled','readonly','required','multiple','for','role','placeholder',
+    'tabindex','autocomplete','inputmode','min','max','step','pattern','maxlength','minlength',
+    'data-testid','data-test','data-qa','data-cy','data-state',
+})
+ATTRIBUTE_RESTRICTION='Some requested attributes are restricted. Retry using public element metadata; field values and private attributes are excluded.'
+RESERVATION_ENTRY=re.compile(r'^(?:reserve\s+(?:a\s+)?table|book\s+(?:a\s+)?table|make\s+(?:a\s+)?reservation|reservations?|book\s+now|reserve\s+now)$',re.I)
+RESERVATION_PATH=re.compile(r'(?:^|/)(?:reservations?|reserve|book|booking|venues)(?:/|$)',re.I)
+
+
+def sanitize_find_elements(params):
+    """Keep discovery useful without asking the model to retry an attribute list."""
+    attributes=params.get('attributes')
+    if attributes is None:return dict(params)
+    public=list(dict.fromkeys(a.strip().lower() for a in attributes if isinstance(a,str) and a.strip().lower() in PUBLIC_ATTRIBUTES))
+    if attributes and not public:public=['href','id','role','aria-label']
+    return {**params,'attributes':public}
 
 
 def action_url(url):
@@ -43,7 +64,8 @@ def navigation_action(name, params, observed):
 
     A button's label alone is insufficient. Require a safe link destination,
     a navigation landmark, a menu disclosure, a tab or native details control.
-    Submitting controls, risky labels/URLs and sensitive forms never qualify.
+    Reservation entry links/dialogs may qualify from their observed destination
+    or popup semantics. Submissions, transaction URLs and sensitive forms do not.
     """
     if name == 'go_back':
         return True
@@ -59,11 +81,16 @@ def navigation_action(name, params, observed):
     if node.get('sensitive') or node.get('disabled'):
         return False
     label, href = node.get('name', ''), node.get('href', '')
-    if RISK.search(label) or CART_ADD.fullmatch(label.strip()) or URL_MUTATION.search(action_url(href)):
+    if CART_ADD.fullmatch(label.strip()) or URL_MUTATION.search(action_url(href)):
         return False
     form = node.get('form')
     if form and (form.get('sensitive') or node.get('type') in {'submit', 'image'} or form.get('method', '').lower() != 'get'):
         return False
+    restricted=bool(re.search(r'/(?:account|settings|profile|security|billing|payment|checkout)(?:/|$)',urlsplit(observed.get('url','')).path,re.I))
+    if not restricted and not form and RESERVATION_ENTRY.fullmatch(label.strip()):
+        if node.get('tag')=='A' and urlsplit(href).scheme in {'http','https'} and RESERVATION_PATH.search(urlsplit(href).path):return True
+        if node.get('tag')=='BUTTON' and node.get('type')=='button' and node.get('has_popup')=='dialog':return True
+    if RISK.search(label):return False
     if node.get('tag') == 'A' and href:
         return urlsplit(href).scheme in {'http', 'https'}
     # Keyboard activation of a textbox may submit a form, even inside a header.
@@ -89,8 +116,8 @@ def classify_action(name,params,observed,inspect_only=False):
     if name=='request_user':return 'input',''
     if name=='screenshot' and params.get('file_name'):return 'blocked','Screenshot file writes are disabled; use the viewport image.'
     if name=='done' and params.get('files_to_display'):return 'blocked','Files are delivered only through the owned download API.'
-    if name=='find_elements' and any(a not in {'href','src','aria-label','aria-labelledby','aria-selected','aria-checked','aria-disabled','aria-haspopup','aria-expanded','aria-controls','title','name','type','id','class','checked','selected','disabled','for','role'} for a in params.get('attributes',[])):
-        return 'blocked','Only public control attributes may be extracted; private field values are excluded.'
+    if name=='find_elements' and any(a not in PUBLIC_ATTRIBUTES for a in params.get('attributes') or []):
+        return 'blocked',ATTRIBUTE_RESTRICTION
     if name in READ_ACTIONS:return 'read',''
     if observed.get('manual_required'):return 'blocked','Manual login or human verification is required; use request_user with kind=manual.'
     navigation = navigation_action(name, params, observed)

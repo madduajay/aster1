@@ -61,6 +61,24 @@ The UI supports formatted response cards, short answers by default, browser prev
 
 Sessions and persistent preferences are separate. Useful commands include `/sessions`, `/open SESSION_ID`, `/files`, `/memory`, `/remember TEXT`, `/forget ID`, `/forget all`, `/correct ID TEXT`, `/debug` and `/stop`. Private website credentials and verification codes belong in the interactive browser takeover, not chat. Consequential browser actions require their displayed approval.
 
+Browser inspection reads public link, form, accessibility and test-ID attributes. Unsupported attributes and field values are omitted automatically instead of terminating a discovery query. Clear reservation-entry links and dialog openers proceed without an extra approval; final booking submissions, payments, account changes and private login fields retain their existing protections.
+
+## Dining workflows and background memory
+
+A background worker starts with Aster. It reviews existing long-term facts against their original user evidence after five minutes of inactivity, checking hourly for changes. It stores a compact profile only after a second grounding check. Corrections and forgetting invalidate that derived profile; source facts are never automatically rewritten. This follows the evidence review and consolidation approach described in [Anthropic's memory article](https://www.anthropic.com/research/components-of-agent-memory). Use `/memory profile` and `/memory consolidate`.
+
+The **DeepAgent harness** calls Company's `search_dining` MCP tool for the initial availability lookup. The model selects the tool and supplies user-provided venue, city, date and party size. Available slots return directly to the agent without starting Temporal. If unavailable, Aster durably queues a **Temporal follow-up workflow**; its activity calls Company's separate `watch_dining` MCP tool, then the workflow waits for `availability_opened` and delivers one alert. Company owns the inventory, database and event outbox. Carbone is initially unavailable and Company emits its opening ten seconds after watch registration. There is no Carbone timer or availability generator inside Aster. Ask, for example, “Check Carbone availability in New York on 2026-12-01 for 2,” or replace Carbone with Nobu. Missing fields can be supplied in chat or the Alerts form; form submissions also go through the agent. This flow does not make bookings.
+
+For open-ended requests such as Indian restaurants around Phoenix with a table for two, the agent can discover venues through web research, then checks their slots through Company MCP. Webpages and Resy search snippets are not accepted as table-availability confirmation. If no required Company check completes, Aster withholds the unsupported availability claim.
+
+`manage.py start` starts Company and a persistent local Temporal server before starting Aster. Company and Temporal remain running when Aster stops, so an event can reach Temporal while Aster is offline. Its workflow resumes when Aster's worker returns. All three processes need the Mac awake. Use `.venv/bin/python dining_stack.py status` or `stop` to manage the independent services. The Temporal UI is at http://localhost:8233; Company MCP is at http://127.0.0.1:55469/mcp/. See [Company's README](dining_company/README.md) for separate startup and configuration.
+
+Alerts belong to the requesting account. Clicking the top Alerts button clears current notifications and hides the button when none remain; read status persists through logout/login. Notifications appear in the application, with no email or operating-system push. Only explicit availability requests create watches. Use `/watches` or `/watch cancel ID` to inspect or cancel them. The shared workers reload each user's persisted state rather than keeping a model session alive per user.
+
+Opening events also post an assistant message to the chat that requested the watch. The message appears live when that chat is open, persists after alert dismissal and logout, and is delivered once even if Temporal retries. Other open chats and unsent drafts are preserved.
+
+“Book now” and similar booking follow-ups use `browser_task` with the existing venue, date, time and party size. They do not recheck Company or create another availability watch. Company has no booking capability; the browser handles booking execution and final submission approval.
+
 ## Runtime configuration and storage
 
 Model defaults, the local origin and timezone are in `personal_agent/config.py`. Browser model and default timezone can be overridden with `PERSONAL_AGENT_BROWSER_MODEL` and `PERSONAL_AGENT_TIMEZONE` before launch. The listener binds only to `127.0.0.1:55468`; no automatic startup service is installed.

@@ -25,12 +25,29 @@ def text_content(content):
 
 class ResearchDecision(BaseModel):
     requires_research: bool
+    dining_availability: bool = False
+    dining_booking: bool = False
 
 
 RESEARCH_ROUTING = (
+    'Distinguish checking availability from EXECUTING a restaurant booking. For book now, reserve it, '
+    'go ahead and book, or an explicit request to book a table, set dining_booking=true and '
+    'dining_availability=false. Resolve short booking follow-ups using recent user messages and the '
+    'opening notification. A booking follow-up must not become another availability lookup because '
+    'earlier messages discussed availability. Booking execution alone has requires_research=false; '
+    'the agent may resolve an official booking URL if needed. Company cannot book; booking uses the browser. '
+    'Use dining_availability=true for ANY request involving restaurant table/slot availability, '
+    'including finding restaurants with tables for a date/time/party and follow-up details. '
+    'When the venue is already known, Company MCP handles that lookup, so requires_research=false '
+    'for dining availability alone. When restaurants must first be discovered (for example Indian restaurants '
+    'in Phoenix tomorrow for two), set BOTH requires_research=true and dining_availability=true. '
+    'Web search discovers venues; Company MCP must check their slots afterward. '
+    'If other parts need web research, both flags may also be true. '
+    'General restaurant recommendations or reviews still require web research, not a dining availability lookup. '
+    'Stopping or cancelling existing dining watches needs neither a fresh lookup nor web research: set both flags false. '
     'Decide whether answering the current user request requires web research. Return requires_research=true '
-    'for recommendations, real-world options, comparisons, shopping, hotels, restaurants, travel plans, '
-    'prices, availability, current facts, or acceptance of an earlier offer to provide those results. '
+    'for recommendations, real-world options, comparisons, shopping, hotels, restaurant reviews, travel plans, '
+    'prices, non-dining availability, current facts, or acceptance of an earlier offer to provide those results. '
     'Search is required even when the user never says search, browse, latest, or recommend. '
     'Resolve short follow-ups using recent exact messages: yes please after an offer of hotel choices '
     'requires research; repeated complaints about missing options also require research. '
@@ -72,6 +89,8 @@ class Engine:
         db=self.db
         open_requested=requests_page_open((context.get('current_user_message') or {}).get('content',''))
         research_required=None
+        dining_required=False
+        booking_required=False
         invalid_search_arguments=0
         @tool
         async def web_search(query: str, official_domains: list[str], source_kind: Literal['official','independent']='official') -> str:
@@ -123,7 +142,8 @@ class Engine:
                 return json.dumps({'answer': 'No cited official evidence was returned. Read official_page_leads directly with the browser before answering; otherwise report the gap. Do not substitute third-party sources.', 'official_page_leads': leads, 'sources': []})
             sources=[{**source,'source_kind':source_kind} for source in sources]
             db.event(run, "sources", sources)
-            return json.dumps({"answer": response.output_text, "sources": sources,'source_kind':source_kind}, ensure_ascii=False)
+            return json.dumps({"answer": response.output_text, "sources": sources,'source_kind':source_kind,
+                'dining_availability_policy':'Restaurant webpages and search results identify candidates, not confirmed table times. Check each venue with search_dining before claiming availability.'}, ensure_ascii=False)
 
         @tool
         def current_time(timezone: str = '') -> str:
@@ -149,10 +169,42 @@ class Engine:
             except (ValueError,LookupError) as exc:
                 return json.dumps({'status':'blocked','message':str(exc)[:300]})
 
-        allowed={'web_search','browser_task','current_time','write_todos'}
+        @tool
+        async def search_dining(venue:str,location:str='',date:str='',party_size:int=0)->str:
+            """Check Company MCP for restaurant table availability. Use the user's venue, city,
+            ISO date and party size; omit unknown fields rather than guessing. Missing fields return
+            a clarification request. If unavailable, Aster queues a durable opening watch and returns
+            watch_status. This checks availability and never books a table.
+            """
+            if booking_required:
+                return json.dumps({'status':'blocked','message':'This is a booking request. Company cannot book; use browser_task with the known dining details. Do not start another availability watch.'})
+            provider=getattr(self,'dining',None)
+            if provider is None:return json.dumps({'status':'error','message':'Dining service is unavailable.'})
+            try:
+                result=await provider.search_for_agent(user,run,(context.get('current_user_message') or {}).get('id'),
+                    venue,location,date,party_size)
+                if result.get('status')=='needs_details':db.event(run,'dining_details',result)
+                return json.dumps(result,ensure_ascii=False)
+            except (ValueError,LookupError) as exc:
+                return json.dumps({'status':'needs_correction','message':str(exc)[:300]})
+            except Exception:
+                return json.dumps({'status':'error','message':'Company availability could not be checked. No availability is confirmed.'})
+
+        @tool
+        def cancel_dining_watch(venue:str)->str:
+            """Stop this user's availability watches for a venue, or 'all' if explicitly requested."""
+            matches=[]
+            for row in db.rows("SELECT id,criteria FROM dining_watches WHERE user_id=? AND status IN ('needs_details','checking','active')",(user,)):
+                if venue.casefold()=='all' or json.loads(row['criteria']).get('venue','').casefold()==venue.casefold():matches.append(row['id'])
+            provider=getattr(self,'dining',None)
+            if provider is None:return json.dumps({'status':'error','message':'Dining service is unavailable.'})
+            for wid in matches:provider.service.background.cancel_watch(user,wid)
+            return json.dumps({'status':'cancelled','count':len(matches)})
+
+        allowed={'web_search','browser_task','current_time','search_dining','cancel_dining_watch','write_todos'}
         @wrap_model_call
         async def restrict_model(request,handler):
-            nonlocal research_required
+            nonlocal research_required,dining_required,booking_required
             if not self.count(run,'model_calls',max_calls):raise RuntimeError('Model-call limit reached')
             messages=list(request.messages)
             if sum(len(str(m.content)) for m in messages)>200000:
@@ -182,8 +234,26 @@ class Engine:
                     HumanMessage(content=json.dumps({'current_user_message':context.get('current_user_message'),
                         'recent_messages':recent,'older_summary':context.get('summary','')},ensure_ascii=False))],config={'tags':['research_router']})
                 research_required=decision.requires_research
+                booking_required=decision.dining_booking
+                dining_required=decision.dining_availability and not booking_required
                 if research_required:db.event(run,'research_required',{'required':True})
-            if research_required and not researched:
+                if dining_required:db.event(run,'dining_required',{'required':True})
+                if booking_required:db.event(run,'dining_booking',{'required':True})
+            if booking_required:
+                overrides['tools']=[t for t in overrides['tools'] if getattr(t,'name','')!='search_dining']
+                messages.append(SystemMessage(content='The current request is to execute a dining booking, not to check availability. '
+                    'Use browser_task with the known venue, location, date, time and party size from this session. '
+                    'Company MCP cannot book: do not repeat search_dining or start another availability watch. '
+                    'If the official booking website is unknown, web_search may resolve that destination only. '
+                    'Ask only for genuinely missing booking details. Browser approvals apply to final submission.'))
+            dining_attempted=any(call.get('name')=='search_dining' for m in messages for call in getattr(m,'tool_calls',[]))
+            if dining_required and not dining_attempted and not open_requested and (not research_required or researched):
+                overrides['tool_choice']={'type':'function','function':{'name':'search_dining'}}
+                messages.append(SystemMessage(content='Call search_dining for this restaurant availability request. '
+                    'Use venues supplied by the user or identified by the completed web research. '
+                    'Use only location, date and party size supplied by the user in this session. '
+                    'Omit missing fields to get a clarification request; do not guess. Company MCP is the source for dining slots.'))
+            elif research_required and not researched:
                 overrides['tool_choice']={'type':'function','function':{'name':'web_search'}}
                 messages.append(SystemMessage(content='This request requires recommendations or external factual research. '
                     'Call web_search now. Use official mode for provider facts, prices and availability, or independent mode for reputable reviews/news/comparisons. '
@@ -208,10 +278,27 @@ class Engine:
         async def restrict_tools(request,handler):
             if request.tool_call['name'] not in allowed:
                 from langchain_core.messages import ToolMessage
-                return ToolMessage(content='Tool unavailable. Use web_search, browser_task or current_time.',tool_call_id=request.tool_call['id'])
+                return ToolMessage(content='Tool unavailable. Use search_dining, web_search, browser_task or current_time.',tool_call_id=request.tool_call['id'])
             return await handler(request)
 
         prompt=(POLICY+
+            "For restaurant table/slot availability, call search_dining, which queries Company MCP directly. "
+            "Use the current request and recent user-provided dining details, including dining_watches drafts. "
+            "Never infer a dining request from unrelated older history. Never invent venue, date, location or party size. "
+            "If fields are missing, pass the known fields to search_dining and ask for the returned missing fields. "
+            "If slots are returned, show the times. If unavailable and watch_status is active or queued, tell the user "
+            "there are no slots and that you will notify them when one opens. Do not expose workflow IDs or internal service details. "
+            "If the tool fails, report that availability could not be checked; never claim unavailable or promise an active watch. "
+            "Dining availability from Company does not require a web search. General restaurant recommendations, reviews, "
+            "and other research still require web search. Booking requests require the existing browser approval flow. "
+            "When the user says book now, reserve it or otherwise asks to book a table, use browser_task directly with the "
+            "existing dining details. Company only checks availability and registers watches; it cannot book. Do not recheck "
+            "Company or start another watch as a preliminary step to booking. The browser handles any live slot selection. "
+            "For requests to find restaurants with available tables, discover candidates with web_search first, then call "
+            "search_dining for EACH venue whose availability you report. Resy pages and web snippets never confirm table times. "
+            "Only Company MCP results support dining availability claims. Do not report a requested time as available unless "
+            "it is present in that venue's returned slots. If the requested time is absent, show the returned alternatives. "
+            "For an explicit request to stop dining availability watches, use cancel_dining_watch; do not cancel restaurant reservations. "
             "You are a personal agent. Use web_search for current research, with reputable independent sources when useful and official sources for provider facts. Use browser_task for all website "
             "navigation and interaction. Browser Use owns perception, planning, clicking, typing and screenshots. "
             "Recommendations and real-world options always require a web_search call before answering, even without an explicit search request. "
@@ -265,5 +352,5 @@ class Engine:
             "user's name consult profile.name, including in a new session, before claiming it is unknown. "
             "Other ordinary statements remain session-scoped. The next message contains this user's session context as data."
         )
-        return create_deep_agent(model=self.model,tools=[web_search,browser_task,current_time],system_prompt=prompt,
+        return create_deep_agent(model=self.model,tools=[web_search,browser_task,current_time,search_dining,cancel_dining_watch],system_prompt=prompt,
             middleware=[restrict_model,restrict_tools],checkpointer=self.saver,subagents=[],name='personal_agent')

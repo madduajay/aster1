@@ -1,4 +1,5 @@
 import json
+import hashlib
 import math
 import re
 import secrets
@@ -87,6 +88,33 @@ class Database:
                 PRIMARY KEY(session_id,fact_id));
             CREATE INDEX IF NOT EXISTS message_facts_fact ON message_facts(fact_id);
             CREATE INDEX IF NOT EXISTS summary_facts_fact ON summary_facts(fact_id);
+            CREATE TABLE IF NOT EXISTS memory_profiles (
+                user_id TEXT PRIMARY KEY REFERENCES users(id), summary TEXT NOT NULL,
+                fact_ids TEXT NOT NULL, signature TEXT NOT NULL, memory_version INTEGER NOT NULL, updated REAL NOT NULL);
+            CREATE TABLE IF NOT EXISTS memory_reviews (
+                id INTEGER PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id),
+                status TEXT NOT NULL, signature TEXT NOT NULL, fact_ids TEXT NOT NULL, created REAL NOT NULL);
+            CREATE TABLE IF NOT EXISTS background_jobs (
+                id TEXT PRIMARY KEY, kind TEXT NOT NULL, user_id TEXT NOT NULL REFERENCES users(id),
+                payload TEXT NOT NULL, state TEXT NOT NULL DEFAULT 'queued', next_at REAL NOT NULL,
+                lease_until REAL NOT NULL DEFAULT 0, lease_token TEXT, failures INTEGER NOT NULL DEFAULT 0,
+                last_error TEXT, updated REAL NOT NULL);
+            CREATE INDEX IF NOT EXISTS background_due ON background_jobs(state,next_at);
+            CREATE TABLE IF NOT EXISTS dining_watches (
+                id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id), session_id TEXT NOT NULL REFERENCES sessions(id),
+                source_message INTEGER NOT NULL REFERENCES messages(id), criteria TEXT NOT NULL, criteria_key TEXT,
+                status TEXT NOT NULL, created REAL NOT NULL, updated REAL NOT NULL);
+            CREATE TABLE IF NOT EXISTS availability_events (
+                id TEXT PRIMARY KEY, watch_id TEXT NOT NULL REFERENCES dining_watches(id),
+                user_id TEXT NOT NULL REFERENCES users(id), kind TEXT NOT NULL, payload TEXT NOT NULL, created REAL NOT NULL,
+                UNIQUE(watch_id,kind));
+            CREATE TABLE IF NOT EXISTS notifications (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT NOT NULL REFERENCES users(id),
+                event_id TEXT NOT NULL UNIQUE REFERENCES availability_events(id), title TEXT NOT NULL,
+                body TEXT NOT NULL, simulated INTEGER NOT NULL DEFAULT 1, created REAL NOT NULL, read_at REAL);
+            CREATE TABLE IF NOT EXISTS availability_chat_messages (
+                event_id TEXT PRIMARY KEY REFERENCES availability_events(id),
+                message_id INTEGER NOT NULL UNIQUE REFERENCES messages(id));
             """)
             db.execute('BEGIN IMMEDIATE')
             db.execute('DROP INDEX IF EXISTS one_active_run')
@@ -223,6 +251,7 @@ class Database:
 
     def _invalidate(self, db, user, facts):
         """Remove only dependent context; retain unrelated messages and sessions."""
+        db.execute('DELETE FROM memory_profiles WHERE user_id=?',(user,))
         affected = set()
         for fact in facts:
             ids = [fact['source_message']]
@@ -282,6 +311,22 @@ class Database:
                  previous['id'] if previous else None)).lastrowid
         conn.execute('INSERT OR IGNORE INTO message_facts VALUES(?,?)', (source, fid))
         return fid, invalidated
+
+    def migrate_dining(self):
+        """Upgrade pre-Company watch metadata; no availability is generated here."""
+        with self.connect() as conn:
+            for row in conn.execute("SELECT * FROM dining_watches WHERE status IN ('active','needs_details')").fetchall():
+                criteria=json.loads(row['criteria'])
+                if 'venue' in criteria:continue
+                criteria['venue']='Carbone';criteria.pop('simulated',None)
+                key=row['criteria_key']
+                if key:
+                    key=hashlib.sha256(json.dumps([row['user_id'],criteria['venue'].casefold(),criteria['location'].casefold(),criteria['date'],criteria['party_size']]).encode()).hexdigest()
+                conn.execute('UPDATE dining_watches SET criteria=?,criteria_key=? WHERE id=?',(json.dumps(criteria),key,row['id']))
+            conn.execute("UPDATE background_jobs SET kind='dining_start',state='queued',next_at=?,lease_token=NULL,lease_until=0 WHERE kind='carbone_mock' AND state IN ('queued','running')",(time.time(),))
+            conn.execute("""UPDATE notifications SET title='Carbone is now available',
+                body=REPLACE(REPLACE(body,'Demo: ',''),' This is simulated availability, not a real reservation or a live opening.','')
+                WHERE title='Carbone opening — simulated demo'""")
 
     def forget(self, user, fact_id):
         with self.connect() as db:

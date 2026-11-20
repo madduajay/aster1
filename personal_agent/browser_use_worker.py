@@ -13,7 +13,7 @@ import sys
 os.environ.update(ANONYMIZED_TELEMETRY='false',BROWSER_USE_CLOUD_SYNC='false',BROWSER_USE_LOGGING_LEVEL='critical',
                   CDP_LOGGING_LEVEL='CRITICAL',BROWSER_USE_DISABLE_EXTENSIONS='1',DO_NOT_TRACK='1')
 sys.path.insert(0,str(Path(__file__).resolve().parent))
-from browser_policy import navigation_action, ALLOWED_ACTIONS, WRITE_ACTIONS, READ_ACTIONS, action_binding
+from browser_policy import navigation_action, ALLOWED_ACTIONS, WRITE_ACTIONS, READ_ACTIONS, action_binding,sanitize_find_elements
 from browser_recovery import PAGE_OBSERVER, RecoveryBudget, combine_observations, input_need
 from browser_diagnostics import diagnostic_stage, exception_details, clean_message, safe_target
 from browser_connection import FreshObservationRequired, connection_error, resilient_browser
@@ -237,11 +237,12 @@ async def main():
             values=action.model_dump(exclude_unset=True)
             if len(values)!=1:return ActionResult(error='Only one browser action may execute at a time.')
             name,params=next(iter(values.items()))
-            omitted_values=False
-            if name=='find_elements' and 'value' in params.get('attributes',[]):
-                params['attributes']=[a for a in params['attributes'] if a!='value']
+            filtered_attributes=False
+            if name=='find_elements':
+                sanitized=sanitize_find_elements(params)
+                filtered_attributes=sanitized.get('attributes')!=params.get('attributes')
+                params=sanitized
                 action=action.__class__.model_validate({name:params})
-                omitted_values=True
             target_params=params if name in {'inspect_selector','click_selector','hover_selector','drag_selector'} else {k:v for k,v in params.items() if k not in {'selector','target_selector'}}
             if name=='send_keys':target_params={**target_params,'_focused':True}
             if name not in ALLOWED_ACTIONS:return ActionResult(error='Action disabled by application policy.')
@@ -300,7 +301,7 @@ async def main():
                 stage='observe_after_action'
                 if name=='find_elements' and result.extracted_content:
                     result.extracted_content='IMPORTANT: bracketed numbers below are query-result positions, NOT clickable browser_state indices. Use find_controls for actual indices. For controls missing from that list, use inspect_selector on an exact unique CSS selector, then click_selector.\n'+result.extracted_content
-                    if omitted_values:result.extracted_content+='\nPrivate field values were excluded. inspect_selector returns the safe state of one exact control.'
+                    if filtered_attributes:result.extracted_content+='\nSome requested attributes were omitted; public element metadata is shown. inspect_selector returns the safe state of one exact control.'
                 # Browser Use otherwise prefers a brief long_term_memory such
                 # as "Found 3 elements" and hides the actual query result from
                 # the next model step. Preserve its documented read-state path.

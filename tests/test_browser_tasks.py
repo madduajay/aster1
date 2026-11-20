@@ -10,7 +10,7 @@ from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 
 from personal_agent import browser_tasks as module
 from personal_agent.browser_tasks import BrowserTasks, Worker, GoalCheck
-from personal_agent.browser_policy import action_binding, classify_action,legacy_duplicate_key
+from personal_agent.browser_policy import action_binding, classify_action,legacy_duplicate_key,sanitize_find_elements
 from personal_agent.agent import Engine
 from personal_agent.memory import Memory
 from personal_agent.service import Service
@@ -69,6 +69,46 @@ def test_policy_blocks_host_tools_private_fields_and_readonly_mutations():
     radio=observed('10.0');radio['node'].update(role='radio',tag='LABEL')
     assert classify_action('click_selector',{'selector':'label[for=s10]'},radio)[0]=='preparation'
     assert classify_action('click_selector',{'selector':'label[for=s10]'},radio,inspect_only=True)[0]=='blocked'
+
+
+def test_inspection_keeps_public_metadata_and_omits_private_attributes():
+    params={'selector':'a,input','attributes':['href','target','rel','action','data-testid','data-state',
+        'aria-describedby','value','data-access-token','onclick','data-password','*']}
+    safe=sanitize_find_elements(params)
+    assert safe['attributes']==['href','target','rel','action','data-testid','data-state','aria-describedby']
+    assert 'value' in params['attributes']  # Caller input is not mutated.
+    assert classify_action('find_elements',safe,observed())[0]=='read'
+    assert classify_action('find_elements',{'attributes':None},observed())[0]=='read'
+    assert sanitize_find_elements({'attributes':['value','data-token']})['attributes']==['href','id','role','aria-label']
+
+
+async def test_unsupported_read_attributes_are_recoverable_not_terminal(boundary):
+    manager,user=boundary;state=observed();params={'selector':'a','attributes':['href','onclick']}
+    await manager.before('browser-task',{'seq':1,'operation':'find_elements','params':params,'observed':state,
+        'fingerprint':action_binding('find_elements',params,state)})
+    reply=manager.send.call_args.args[1]
+    assert reply['decision']=='deny' and reply['retry'] is True
+    assert manager.owned(user,'browser-run','browser-task')['status']=='running'
+
+
+@pytest.mark.parametrize('label',['Reserve a table','Book a table','Reservations','Book now'])
+def test_reservation_entry_links_and_dialogs_are_routine_navigation(label):
+    state=observed(label);state['node'].update(tag='A',type='',role='link',form=None,
+        href='https://reservations.example/cities/city/venues/restaurant')
+    assert classify_action('click',{},state)[0]=='read'
+    state['node'].update(tag='BUTTON',type='button',role='button',href='',has_popup='dialog')
+    assert classify_action('click',{},state)[0]=='read'
+    state['node']['form']={'method':'post','sensitive':False}
+    assert classify_action('click',{},state)[0]=='approval'
+
+
+def test_reservation_entry_exemption_does_not_cover_submit_or_checkout():
+    state=observed('Reserve a table');state['node'].update(tag='A',role='link',form=None,
+        href='https://example.com/booking/confirm')
+    assert classify_action('click',{},state)[0]=='approval'
+    state['node']['href']='https://example.com/reservations'
+    state['url']='https://example.com/checkout'
+    assert classify_action('click',{},state)[0]=='approval'
 
 
 def test_search_semantics_do_not_approve_checkout_or_account_forms():

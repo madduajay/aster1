@@ -48,6 +48,12 @@ class Turn(BaseModel):
     attachment_ids: list[str] = Field(default_factory=list, max_length=10)
 
 
+class DiningDetails(BaseModel):
+    location: str = Field(min_length=2,max_length=80)
+    date: str = Field(pattern=r'^\d{4}-\d{2}-\d{2}$')
+    party_size: int = Field(ge=1,le=20)
+
+
 class Approval(BaseModel):
     approval_id: str
     decision: str = Field(pattern='^(approve|reject)$')
@@ -91,6 +97,8 @@ def create_app(database=None, service=None):
             del key
             app.state.db, app.state.service = db, Service(db, engine)
             app.state.service.recover()
+            await app.state.service.dining.start()
+            app.state.service.background.start()
             try:
                 yield
             finally:
@@ -216,6 +224,42 @@ def create_app(database=None, service=None):
     @app.get('/api/sessions')
     def sessions(request: Request, uid=Depends(user)):
         return db(request).rows("SELECT id,title,created FROM sessions WHERE user_id=? ORDER BY created DESC LIMIT 100", (uid,))
+
+    @app.get('/api/background')
+    def background_status(request:Request,uid=Depends(user)):
+        manager=getattr(request.app.state.service,'background',None)
+        return manager.snapshot(uid) if manager else {'watches':[],'notifications':[],'profile':None,'memory_job':None,'memory_review':None}
+
+    @app.post('/api/background/memory')
+    def queue_memory_review(request:Request,uid=Depends(user)):
+        request.app.state.service.background.queue_memory(uid)
+        return {'queued':True}
+
+    @app.post('/api/background/watches/{wid}')
+    async def activate_dining(wid:str,body:DiningDetails,request:Request,uid=Depends(user)):
+        watch=db(request).one("SELECT session_id,criteria FROM dining_watches WHERE id=? AND user_id=? AND status='needs_details'",(wid,uid))
+        if not watch:raise LookupError('Watch not found')
+        criteria=json.loads(watch['criteria'])
+        text=f"Check dining availability at {criteria['venue']} in {body.location} on {body.date} for {body.party_size}."
+        result=await request.app.state.service.submit(uid,watch['session_id'],text)
+        return {**result,'session_id':watch['session_id']}
+
+    @app.post('/api/background/watches/{wid}/cancel')
+    def cancel_dining(wid:str,request:Request,uid=Depends(user)):
+        request.app.state.service.background.cancel_watch(uid,wid)
+        return {'cancelled':True}
+
+    @app.post('/api/background/notifications/read')
+    def read_all_notifications(request:Request,uid=Depends(user)):
+        db(request).execute('UPDATE notifications SET read_at=? WHERE user_id=? AND read_at IS NULL',(time.time(),uid))
+        return {'read':True}
+
+    @app.post('/api/background/notifications/{nid}/read')
+    def read_notification(nid:int,request:Request,uid=Depends(user)):
+        row=db(request).one('SELECT id FROM notifications WHERE id=? AND user_id=?',(nid,uid))
+        if not row:raise HTTPException(404)
+        db(request).execute('UPDATE notifications SET read_at=? WHERE id=? AND user_id=?',(time.time(),nid,uid))
+        return {'read':True}
 
     @app.post('/api/sessions')
     async def new_session(request: Request, uid=Depends(user)):

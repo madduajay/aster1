@@ -17,6 +17,8 @@ from .approvals import approval_text
 from .browser_recovery import input_text
 from .browser_diagnostics import load_diagnostics,debug_text
 from .browser_intent import starts_new_request
+from .background import Background
+from .dining import Dining
 
 
 class Service:
@@ -27,6 +29,9 @@ class Service:
         self.graphs = {}
         self.user_locks = {}
         self.cancel_reasons = {}
+        self.background = Background(self)
+        self.dining = Dining(self)
+        self.engine.dining = self.dining
 
     def recover(self):
         # Paused approvals survive; in-flight actions never auto-resume after restart.
@@ -44,6 +49,10 @@ class Service:
         usage = self.db.one('SELECT searches FROM run_usage WHERE run_id=?', (run,))
         required=self.db.one("SELECT id FROM events WHERE run_id=? AND kind='research_required' LIMIT 1",(run,))
         return bool(not sources and ((usage and usage['searches']) or required))
+
+    def unchecked_dining(self,run):
+        return bool(self.db.one("SELECT id FROM events WHERE run_id=? AND kind='dining_required' LIMIT 1",(run,))
+            and not self.db.one("SELECT id FROM events WHERE run_id=? AND kind IN ('dining_lookup','dining_details') LIMIT 1",(run,)))
 
     def browser_outcome(self,user,run,text):
         if self.db.one("SELECT name FROM sqlite_master WHERE type='table' AND name='browser_use_tasks'"):
@@ -79,6 +88,7 @@ class Service:
 
     async def _submit(self, user, session, text, pending_input_id=None, attachment_ids=None):
         self.db.owned_session(user, session)
+        self.background.foreground(user)
         attachment_ids=list(attachment_ids or [])
         if len(attachment_ids)>10 or len(set(attachment_ids))!=len(attachment_ids):
             raise ValueError('Attach up to ten different files.')
@@ -150,6 +160,17 @@ class Service:
     def command(self, user, session, mid, text):
         parts = text.split(maxsplit=2)
         name = parts[0]
+        if text.strip()=='/memory profile':
+            profile=self.background.snapshot(user)['profile']
+            return profile['summary'] if profile else 'No current consolidated profile yet. Use /memory consolidate to queue an idle review.'
+        if text.strip()=='/memory consolidate':
+            self.background.queue_memory(user)
+            return 'Memory review queued. It runs when you are idle and checks existing facts against their original user evidence.'
+        if name=='/watches':
+            watches=self.background.snapshot(user)['watches']
+            return '\n'.join(f"{w['id']} — Dining: {w['status']} — {w['criteria']}" for w in watches) or 'No dining watches.'
+        if name=='/watch' and len(parts)==3 and parts[1]=='cancel':
+            self.background.cancel_watch(user,parts[2]);return 'Dining watch cancelled.'
         if name == '/sessions':
             rows = self.db.rows("SELECT id,title FROM sessions WHERE user_id=? ORDER BY created DESC LIMIT 100", (user,))
             return '\n'.join(f"{r['id']} — {r['title']}" for r in rows) + '\nUse /open SESSION_ID to continue a conversation.'
@@ -194,7 +215,7 @@ class Service:
             return "Memory corrected; stale summary context cleared."
         if name == '/stop':
             return "No active run."
-        return "Commands: /sessions, /open SESSION_ID, /files, /debug, /remember TEXT, /memory (or /memory review), /forget ID (or all), /correct ID TEXT, /stop."
+        return "Commands: /sessions, /open SESSION_ID, /files, /debug, /remember TEXT, /memory (or /memory review, /memory profile, /memory consolidate), /forget ID (or all), /correct ID TEXT, /watches, /watch cancel ID, /stop."
 
     async def settle_pause(self,user,run_id):
         row=self.db.one('SELECT status FROM runs WHERE id=? AND user_id=?',(run_id,user))
@@ -278,6 +299,7 @@ class Service:
             latest = current['content']
             context['current_user_message'] = current
             context['session_id'] = session
+            context['dining_watches']=self.db.rows("SELECT id,criteria,status FROM dining_watches WHERE user_id=? AND session_id=? AND status IN ('needs_details','active') ORDER BY created DESC LIMIT 5",(user,session))
             context['attached_files']=self.db.rows('''SELECT a.id,a.filename,a.media FROM message_attachments ma
                 JOIN artifacts a ON a.id=ma.artifact_id JOIN messages m ON m.id=ma.message_id
                 WHERE a.user_id=? AND m.session_id=? AND m.id>?
@@ -313,7 +335,7 @@ class Service:
                                     while '\n' in pending:
                                         line, pending = pending.split('\n', 1)
                                         sources = evidence_sources(self.db, run)
-                                        if not self.unverified_research(run, sources):
+                                        if not self.unverified_research(run, sources) and not self.unchecked_dining(run):
                                             clean = vetted_text(line + '\n', sources, empty_fallback=False)
                                             if clean:
                                                 self.db.event(run, 'token', clean)
@@ -342,7 +364,12 @@ class Service:
             sources = evidence_sources(self.db, run)
             buffer = self.browser_outcome(user,run,buffer)
             buffer = vetted_text(buffer, sources)
-            if self.unverified_research(run, sources):
+            if self.unchecked_dining(run):
+                candidates=unverified_link_candidates(buffer)
+                buffer="I couldn't check dining availability. Any suggested restaurants are candidates; their table times have not been confirmed."
+                if candidates:buffer+='\n\n'+vetted_text(candidates,[])
+                self.db.event(run,'token',buffer)
+            elif self.unverified_research(run, sources):
                 note="I couldn't verify information from the selected sources for this request. Any links below are unverified; prices and availability are not confirmed."
                 candidates=unverified_link_candidates(buffer)
                 buffer = note + ('\n\n'+vetted_text(candidates,[]) if candidates else '')
@@ -427,6 +454,8 @@ class Service:
         self.db.event(run_id, 'done', {"status": "cancelled"})
 
     async def close(self):
+        await self.background.stop()
+        await self.dining.close()
         tasks = list(self.tasks.values())
         for task in tasks:
             task.cancel()

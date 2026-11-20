@@ -72,3 +72,10 @@ footer{padding-top:24px;background:linear-gradient(transparent,var(--paper) 24%)
   .message.user{max-width:90%}
 }
 main{padding-bottom:var(--composer-space,210px)}
+#background-panel{background:#fff;border:1px solid var(--line);border-radius:20px;padding:22px;margin-bottom:28px;overflow-wrap:anywhere}
+#background-panel h2{font-size:21px;margin:0 0 14px}#background-panel h3{font-size:15px;margin:0 0 8px}
+.background-card{padding:16px 0;border-top:1px solid var(--line)}.background-card p{color:var(--ink);white-space:pre-wrap}
+.background-note{font-size:12px!important;color:var(--muted)!important}.background-card.unread{border-left:3px solid var(--green);padding-left:14px}
+.background-card[role=button]{cursor:pointer}.background-card[role=button]:focus-visible,#background-toast:focus-visible{outline:2px solid var(--green);outline-offset:3px}
+.background-card label{display:block;font-size:13px;margin:10px 0}.background-card input{display:block;width:100%;max-width:340px;padding:10px;border:1px solid var(--line);border-radius:8px;font:inherit;background:#fff}
+.background-card button{margin:5px 8px 0 0}#background-toast{position:fixed;right:20px;top:88px;max-width:min(420px,calc(100vw - 40px));padding:18px;background:#fff;border:1px solid var(--green);border-radius:16px;box-shadow:0 6px 30px #0002;z-index:5;font-size:14px;cursor:pointer}

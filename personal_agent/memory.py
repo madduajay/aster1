@@ -7,6 +7,7 @@ from pydantic import BaseModel, Field
 from langchain_core.messages import HumanMessage, SystemMessage
 from .clock import clock_context
 from datetime import datetime, timezone
+from .memory_profile import read_profile
 
 
 class Fact(BaseModel):
@@ -181,10 +182,12 @@ class Memory:
         recent = [m for m in messages if covered < m['id'] <= row['covered']]
         tail = [m for m in messages if m['id'] > max(row['covered'], covered)]
         facts = self.db.facts(user, query)
+        profile=read_profile(self.db,user)
         return {"summary": snapshot['summary'] if snapshot else '', "covered_through_message": covered,
                 "latest_summary_coverage": row['covered'], "recent_messages": recent,
                 "unsummarized_messages": tail, "long_term_facts": [fact_context(r) for r in facts],
-                "memory_dependencies": sorted(set(self.db.dependencies(user, session) + [r['id'] for r in facts]))}
+                "consolidated_profile":profile,
+                "memory_dependencies": sorted(set(self.db.dependencies(user, session) + [r['id'] for r in facts] + (profile['fact_ids'] if profile else [])))}
 
     async def summarize(self, user, session, through_message=None):
         """Summarize bounded batches, retaining exact coverage and raw history on errors."""

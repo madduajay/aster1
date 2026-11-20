@@ -14,7 +14,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 
 from . import config
 from .browser_host import audit_url, public_url, redact
-from .browser_policy import classify_action, duplicate_key, legacy_duplicate_key, fingerprint, action_binding
+from .browser_policy import classify_action, duplicate_key, legacy_duplicate_key, fingerprint, action_binding,ATTRIBUTE_RESTRICTION
 from .clock import clock_context
 from .browser_recovery import input_text, input_need
 from .browser_diagnostics import diagnostic_text,load_diagnostics,exception_details
@@ -141,6 +141,7 @@ class BrowserTasks:
                 'Use find_controls to locate exact interactive labels and real browser_state indices. '
                 'Search is navigation: submit the focused search field after typing. Cancel/Close dismisses search and does not submit it. '
                 'If a visible label is missing from indices, discover its exact unique CSS selector with find_elements, inspect_selector, then click_selector. '
+                'Public DOM attributes such as href, target, rel, action, aria labels and test IDs can be read. Unsupported attributes are omitted automatically; continue with the public results instead of stopping. Never extract field values or private attributes. '
                 'The bracketed positions returned by find_elements are NOT clickable indices. Never use them as action indices. '
                 'Authoritative current clock: '+json.dumps(clock_context())+'.')
             if inspect_only:instructions+=' This task is INSPECTION ONLY. Do not click controls, type, upload, or submit anything.'
@@ -221,6 +222,7 @@ class BrowserTasks:
                 OR t.id=? AND a.status='verified') LIMIT 1''',(w.user,key,legacy_duplicate_key(name,params,observed),
                     legacy_duplicate_key(name,params,{**observed,'node':{}}) if name=='send_keys' else key,tid))
             if duplicate:category,reason,retry='blocked','A matching submission may already have occurred. Inspect its outcome; automatic repetition is blocked.',True
+        if category=='blocked' and reason==ATTRIBUTE_RESTRICTION:retry=True
         if category=='input':
             kind=params.get('kind','information')
             if kind not in {'information','manual'}:kind='information'

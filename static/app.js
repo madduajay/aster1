@@ -120,6 +120,7 @@ function renderMessages(rows,refresh){
   return known;
 }
 function signedOut() {
+  window.stopBackgroundUI?.();
   clearDraftFiles();
   clearBrowser();
   navigation++;feed?.close(); feed=null; account=null;session=null;mode='login';pendingApproval=null;
@@ -151,6 +152,7 @@ async function openSession(id,{refresh=false}={}) {
   const stick=refresh&&atBottom();
   feed?.close();feed=null;session=id;liveText='';$('welcome').hidden=result.messages.length>0;$('status').textContent='';
   renderMessages(result.messages,refresh);answer=null;
+  window.refreshBackground?.();
   for(const controls of $('messages').querySelectorAll('.approval-actions'))controls.remove();
   let approvalNode=null;
   if(result.active_run?.approval_message_id)approvalNode=Array.from($('messages').children).find(n=>n.dataset.messageId===String(result.active_run.approval_message_id));

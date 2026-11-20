@@ -69,7 +69,7 @@ def test_origin_and_login_rejection(client, credentials):
 
 def test_only_requested_buttons_and_safe_rendering(client):
     html = client.get('/').text
-    assert re.findall(r'<button[^>]*\bid="([^"]+)"', html) == ['new', 'auth', 'attach']
+    assert re.findall(r'<button[^>]*\bid="([^"]+)"', html) == ['new', 'alerts', 'auth', 'attach']
     js = client.get('/static/app.js').text
     assert 'innerHTML' not in js
     assert "frame-ancestors 'none'" in client.get('/').headers['content-security-policy']
@@ -103,4 +103,4 @@ def test_uploaded_files_are_owned(client,database,users,credentials):
     client.post('/api/logout',json={});authenticate(client,credentials,'user02')
     assert client.get('/api/artifacts/'+aid).status_code==404
     assert client.post('/api/uploads?session_id='+sid,content=b'no').status_code==404
-    assert re.findall(r'<button[^>]*\bid="([^"]+)"',client.get('/').text)==['new','auth','attach']
+    assert re.findall(r'<button[^>]*\bid="([^"]+)"',client.get('/').text)==['new','alerts','auth','attach']

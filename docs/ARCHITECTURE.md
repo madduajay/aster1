@@ -9,6 +9,11 @@ The browser UI sends authenticated requests to FastAPI, which coordinates a per-
 | `service.py` | User locks, task lifecycle, context, streaming, cancellation, and memory scheduling |
 | `agent.py` | DeepAgents graph, research routing, web search and model/tool limits |
 | `db.py` / `memory.py` | SQLite persistence, summaries, preferences, correction and forgetting |
+| `background.py` | Idle memory worker, leased Temporal dispatch jobs and account-scoped alert status |
+| `dining.py` / `dining_workflow.py` | Agent MCP lookup, unavailable-only Temporal watch registration, signal wait and notification delivery |
+| `dining_company/` | Independent Company MCP server, its own inventory database and durable event outbox |
+| `dining_stack.py` | Lifecycle for Company and a persistent local Temporal server |
+| `memory_profile.py` | Evidence-based idle consolidation, independent grounding check and version-checked derived profiles |
 | `attachments.py` | Owned file metadata and bounded image input for model calls |
 | `browser_tasks.py` | Worker supervision, approval receipts, duplicate protection and independent verification |
 | `browser_use_worker.py` | Isolated Browser Use perception/planning and guarded action execution |
@@ -18,6 +23,39 @@ The browser UI sends authenticated requests to FastAPI, which coordinates a per-
 | `tunnel.py` | Optional ngrok lifecycle; public tunnel settings were not changed in maintenance |
 
 ## Boundaries
+
+```mermaid
+flowchart TD
+  UI[Chat and Alerts UI] --> API[Authenticated FastAPI]
+  API --> Service[Per-user foreground coordination]
+  Service --> Agent[DeepAgent harness]
+  Agent -->|Booking request: browser_task| Browser[Browser Use and final approval]
+  Agent -->|Tool: MCP search_dining| Company[Company: independent process]
+  Company --> Availability{Slots available?}
+  Availability -->|Yes: return slots, no workflow| Agent
+  Availability -->|No: queue follow-up watch| Jobs[(SQLite dispatch outbox)]
+  Jobs --> Temporal[Temporal follow-up workflow]
+  Temporal -->|Activity: MCP watch_dining| Company
+  Company --> Inventory[(Company inventory and event outbox)]
+  Inventory -->|Carbone: 10-second opening event| Signal[Temporal availability_opened signal]
+  Signal -->|Resume waiting workflow| Temporal
+  Temporal -->|Activity: deliver once| Notices[(Account-scoped notifications)]
+  Notices --> UI
+  Worker[Shared background worker] --> Jobs
+  Worker -->|Idle memory job| Evidence[Active facts and original user evidence]
+  Evidence --> Review[Compact summary and grounding model checks]
+  Review --> Version{Memory version still current?}
+  Version -->|Yes| Profile[(Disposable user profile)]
+  Profile --> Agent
+```
+
+All ordinary chat requests enter DeepAgent. A model-based router distinguishes dining availability from general recommendations and web research. The initial Company lookup runs as an agent tool, not a Temporal activity. Missing details return to the agent for clarification. Company errors do not create watches or imply unavailability. Only an accepted unavailable result queues Temporal, using a durable SQLite outbox and stable workflow ID. Its registration activity starts Company's event subscription; the workflow then waits for a signal. Available results never start a workflow. Form submissions also enter the same agent path.
+
+Booking execution is a separate intent, including short follow-ups after an opening. These runs use Browser Use; the Company availability tool is hidden and also rejects invocation if attempted. This prevents a booking follow-up from rechecking Company and generating a second watch. Browser execution retains its approval and outcome-verification boundaries.
+
+Temporal records registration and delivery activity results and waits durably for a Company signal; it does not run Aster-side availability timers. Company owns all venue-specific inventory behavior and retains undelivered events in its separate database. Signals can arrive while Aster's worker is stopped; replay resumes the workflow when it returns. Criteria correlation, watch ownership, current status and unique event IDs guard notification delivery. Cancelling a watch prevents a later or retried activity from notifying its user. The previous generic workflow and activity names remain registered only to drain existing executions without breaking replay; new requests use `DiningWatchWorkflow`.
+
+Company and Temporal have independent lifecycles and remain running when Aster stops. Memory maintenance stays inside Aster, yields to foreground activity, and discards results if source memories change during model calls. No per-user resident model session is required.
 
 Research never authorizes a transaction. Independent-source mode is read-only context, not permission to change browser scope or act on an account. The browser worker's approval, ownership, and uncertain-outcome protections apply independently of model reasoning and retries.
 
