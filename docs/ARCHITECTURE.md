@@ -2,6 +2,8 @@
 
 The browser UI sends authenticated requests to FastAPI, which coordinates a per-user agent and SQLite storage.
 
+Dining and travel use the independent services described in [Dining and Travel Subagents](availability-subagents.md), including the current sequence diagram, ports, webhook contracts, shared-state ownership and user-configured Temporal Schedules (five-minute default, one-minute minimum). The dining-only flow below describes retained compatibility workers for earlier executions; new requests use `delegate_dining`/`delegate_travel`, subagent DeepAgent MCP searches, and signed subagent webhooks.
+
 | Component | Responsibility |
 | --- | --- |
 | `manage.py` | Manual HTTPS startup, shutdown, TLS fingerprint checks and Keychain loading |
@@ -10,9 +12,10 @@ The browser UI sends authenticated requests to FastAPI, which coordinates a per-
 | `agent.py` | DeepAgents graph, research routing, web search and model/tool limits |
 | `db.py` / `memory.py` | SQLite persistence, summaries, preferences, correction and forgetting |
 | `background.py` | Idle memory worker, leased Temporal dispatch jobs and account-scoped alert status |
-| `dining.py` / `dining_workflow.py` | Agent MCP lookup, unavailable-only Temporal watch registration, signal wait and notification delivery |
+| `availability/` | Main delegation gateway, dining/travel DeepAgents, shared scoped state, signed webhook inboxes, Company inventories and Temporal schedules/workflows |
+| `dining.py` / `dining_workflow.py` | Compatibility worker and activities for previously started dining workflows |
 | `dining_company/` | Independent Company MCP server, its own inventory database and durable event outbox |
-| `dining_stack.py` | Lifecycle for Company and a persistent local Temporal server |
+| `dining_stack.py` | Lifecycle for three Company services, two subagents and persistent local Temporal |
 | `memory_profile.py` | Evidence-based idle consolidation, independent grounding check and version-checked derived profiles |
 | `attachments.py` | Owned file metadata and bounded image input for model calls |
 | `browser_tasks.py` | Worker supervision, approval receipts, duplicate protection and independent verification |
@@ -22,7 +25,7 @@ The browser UI sends authenticated requests to FastAPI, which coordinates a per-
 | `static/` | Chat rendering, composer attachments, streaming and takeover UI |
 | `tunnel.py` | Optional ngrok lifecycle; public tunnel settings were not changed in maintenance |
 
-## Boundaries
+## Retained dining workflow compatibility
 
 ```mermaid
 flowchart TD
@@ -53,7 +56,7 @@ All ordinary chat requests enter DeepAgent. A model-based router distinguishes d
 
 Booking execution is a separate intent, including short follow-ups after an opening. These runs use Browser Use; the Company availability tool is hidden and also rejects invocation if attempted. This prevents a booking follow-up from rechecking Company and generating a second watch. Browser execution retains its approval and outcome-verification boundaries.
 
-Temporal records registration and delivery activity results and waits durably for a Company signal; it does not run Aster-side availability timers. Company owns all venue-specific inventory behavior and retains undelivered events in its separate database. Signals can arrive while Aster's worker is stopped; replay resumes the workflow when it returns. Criteria correlation, watch ownership, current status and unique event IDs guard notification delivery. Cancelling a watch prevents a later or retried activity from notifying its user. The previous generic workflow and activity names remain registered only to drain existing executions without breaking replay; new requests use `DiningWatchWorkflow`.
+Temporal records registration and delivery activity results and waits durably for a Company signal; it does not run Aster-side availability timers. Company owns inventory behavior and retains undelivered events in its separate database. Legacy signals can arrive while Aster's worker is stopped; replay resumes the workflow when it returns. New events use subagent webhooks and the `SubagentWatch` / `MainAvailability` workflows. Criteria correlation, watch ownership, status and delivery deduplication guard notification delivery. Cancelling a watch prevents a late notification. Legacy workflow/activity names remain registered to drain existing executions without breaking replay.
 
 Company and Temporal have independent lifecycles and remain running when Aster stops. Memory maintenance stays inside Aster, yields to foreground activity, and discards results if source memories change during model calls. No per-user resident model session is required.
 

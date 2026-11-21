@@ -1,5 +1,9 @@
 # Company Dining
 
+The current production interface uses `query_id` and a structured `criteria` object on `search_dining` / `watch_dining`, plus `cancel_dining`. Only Carbone **New York** initially lacks slots. Opening events go to the Dining subagent's signed webhook, rather than directly to Temporal. MCP requests require the internal bearer token. Hotels and flights have separate Company services. See [the current service architecture](../docs/availability-subagents.md) for ports, operation and event flow.
+
+The older field-based interface and direct Temporal publisher described below remain available solely to drain existing dining executions.
+
 Company is a separate process with its own SQLite database. It has no imports from Aster and no access to Aster's users, conversations, browser profiles or API keys. It exposes `search_dining` and `watch_dining` over MCP Streamable HTTP.
 
 It can also use its own Python environment: install `dining_company/requirements.txt` and run the module against the configured Temporal server. Aster's environment and its OpenAI credentials are not needed by Company.

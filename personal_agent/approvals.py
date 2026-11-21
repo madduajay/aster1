@@ -44,4 +44,8 @@ def display_message(role,content):
                 if isinstance(details,dict) and re.fullmatch(r'Reply approve ([a-f0-9]{8}) or reject \1\.',trailer):
                     return approval_text({'action':details})
             except (ValueError,TypeError):pass
+    if role=='assistant':
+        from .public_errors import customer_text
+        content=re.sub(r'(?m)^\*\*(?:Hotels|Flights|Dining)(?: [—-] checked availability)?\*\*[ \t]*\n(?:[ \t]*\n)*(?=[ \t]*\|)','',content)
+        return customer_text(content)
     return content

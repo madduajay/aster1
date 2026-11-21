@@ -304,7 +304,7 @@ class BrowserTasks:
         except Exception as exc:
             self.record_diagnostic(tid,exception_details(exc,operation='worker',stage='worker_supervision',dispatched=None))
             self.db.execute("UPDATE browser_use_actions SET status='unknown' WHERE task_id=? AND status='dispatching'",(tid,))
-            self.db.execute("UPDATE browser_use_tasks SET status='interrupted',result=? WHERE id=? AND status IN ('running','approval')",(json.dumps({'status':'interrupted','message':'Browser worker stopped ('+type(exc).__name__+'). Inspect before repeating any submission.','diagnostic':str(exc)[:150] if isinstance(exc,RuntimeError) else type(exc).__name__}),tid))
+            self.db.execute("UPDATE browser_use_tasks SET status='interrupted',result=? WHERE id=? AND status IN ('running','approval')",(json.dumps({'status':'interrupted','message':'The website task was interrupted. Check the current page before trying again.','diagnostic':str(exc)[:150] if isinstance(exc,RuntimeError) else type(exc).__name__}),tid))
             w.changed.set()
         finally:
             await self.terminate(tid,from_pump=True)
@@ -313,7 +313,7 @@ class BrowserTasks:
         w=self.workers[tid]
         self.owned(w.user,w.run,tid)
         self.db.execute('INSERT INTO browser_use_diagnostics(task_id,seq,details,created) VALUES(?,?,?,?)',(tid,seq,json.dumps(details),time.time()))
-        self.db.event(w.run,'diagnostic',{'text':diagnostic_text(details),'details':details})
+        self.db.event(w.run,'diagnostic',{'text':'A website step needs attention.','details':details})
 
     async def watch_dialogs(self,tid):
         """Native confirm dialogs require their own approval, never auto-accept."""

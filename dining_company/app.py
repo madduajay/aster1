@@ -13,6 +13,10 @@ from fastapi import FastAPI
 from mcp.server.fastmcp import FastMCP
 from pydantic import BaseModel,Field
 from temporalio.client import Client
+from availability.company import Stock
+from availability.security import Security
+from fastapi import Request
+from fastapi.responses import JSONResponse
 
 
 class DiningQuery(BaseModel):
@@ -74,19 +78,26 @@ class Inventory:
 
 
 def create_company(path=None,client=None):
-    runtime=Path(os.environ.get('DINING_COMPANY_RUNTIME',Path(__file__).resolve().parent.parent/'.runtime/company'))
+    runtime=Path(os.environ.get('DINING_COMPANY_RUNTIME',Path(os.environ.get('PERSONAL_AGENT_RUNTIME',Path(__file__).resolve().parent.parent/'.runtime'))/'company'))
     inventory=Inventory(path or runtime/'company.sqlite')
+    security=Security(Path(path).parent if path else runtime.parent)
+    stock=Stock(runtime/'dining-inventory.sqlite','dining',security)
     mcp=FastMCP('Company Dining',stateless_http=True,json_response=True,streamable_http_path='/')
 
     @mcp.tool()
-    def search_dining(request_id:str,venue:str,location:str,date:str,party_size:int)->dict:
+    def search_dining(request_id:str='',venue:str='',location:str='',date:str='',party_size:int=0,query_id:str='',criteria:dict|None=None)->dict:
         """Check dining slots for a venue, city, date and party size. This does not register a watch."""
+        if criteria is not None:return stock.search(query_id,criteria)
         return inventory.search(DiningQuery(request_id=request_id,venue=venue,location=location,date=date,party_size=party_size))
 
     @mcp.tool()
-    def watch_dining(request_id:str,venue:str,location:str,date:str,party_size:int)->dict:
+    def watch_dining(request_id:str='',venue:str='',location:str='',date:str='',party_size:int=0,query_id:str='',criteria:dict|None=None)->dict:
         """Register an availability watch for the correlated Temporal workflow."""
+        if criteria is not None:return stock.watch(query_id,criteria)
         return inventory.subscribe(DiningQuery(request_id=request_id,venue=venue,location=location,date=date,party_size=party_size))
+
+    @mcp.tool()
+    def cancel_dining(query_id:str)->dict:return stock.cancel(query_id)
 
     async def publish(temporal):
         while True:
@@ -94,16 +105,27 @@ def create_company(path=None,client=None):
             except sqlite3.OperationalError:pass
             await asyncio.sleep(.2)
 
+    async def publish_stock():
+        while True:
+            await stock.deliver();await asyncio.sleep(.2)
+
     @asynccontextmanager
     async def lifespan(app):
         temporal=client or await Client.connect(os.environ.get('TEMPORAL_ADDRESS','127.0.0.1:7233'),namespace=os.environ.get('TEMPORAL_NAMESPACE','default'))
         async with mcp.session_manager.run():
-            task=asyncio.create_task(publish(temporal))
+            tasks=[asyncio.create_task(publish(temporal)),asyncio.create_task(publish_stock())]
             try:yield
-            finally:task.cancel();await asyncio.gather(task,return_exceptions=True)
+            finally:
+                for task in tasks:task.cancel()
+                await asyncio.gather(*tasks,return_exceptions=True)
 
     app=FastAPI(lifespan=lifespan,docs_url=None,redoc_url=None,openapi_url=None)
     app.state.inventory=inventory
+    app.state.stock=stock
+    @app.middleware('http')
+    async def auth(request:Request,call_next):
+        if request.url.path!='/health' and not security.authorize(request.headers):return JSONResponse({'detail':'Unauthorized'},401)
+        return await call_next(request)
     @app.get('/health')
     def health():return {'service':'company-dining'}
     app.mount('/mcp',mcp.streamable_http_app())

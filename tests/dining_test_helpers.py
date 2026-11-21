@@ -28,8 +28,8 @@ class FakeTemporal:
 
 
 def lookup_messages(venue='Carbone',location='New York',date='2099-12-01',party_size=2,reply=None):
-    return [AIMessage(content='',tool_calls=[{'name':'search_dining','args':{
-        'venue':venue,'location':location,'date':date,'party_size':party_size},'id':uuid.uuid4().hex,'type':'tool_call'}]),
+    return [AIMessage(content='',tool_calls=[{'name':'delegate_dining','args':{'queries':[{'domain':'dining','criteria':{
+        'venue':venue,'location':location,'date':date,'party_size':party_size}}]},'id':uuid.uuid4().hex,'type':'tool_call'}]),
         AIMessage(content=reply or f'{venue} is currently unavailable for {party_size} in {location}. I’ll let you know when a table opens up.')]
 
 
@@ -37,6 +37,24 @@ def agent_service(database,responses=None):
     model=ScriptedModel(responses=responses or lookup_messages())
     engine=Engine(database,StubBrowsers(),InMemorySaver(),'sk-test',model=model)
     service=Service(database,engine);service.memory=Memory(database,SummaryModel())
+    # This fixture retains the legacy provider to test draining existing dining
+    # executions. The new gateway/three-domain path has its own integration suite.
+    async def legacy_delegate(user,run,queries,role,monitor=False,deadline=''):
+        owned=database.one('SELECT session_id FROM runs WHERE id=?',(run,))
+        source=database.one("SELECT id FROM messages WHERE session_id=? AND role='user' ORDER BY id DESC LIMIT 1",(owned['session_id'],))
+        result=None
+        for query in queries:
+            c=query['criteria']
+            result=await service.dining.search_for_agent(user,run,source['id'],c.get('venue',''),c.get('location',''),c.get('date',''),c.get('party_size',0))
+        if result and result.get('status')=='needs_details':database.event(run,'dining_details',result)
+        if result:
+            c=queries[0]['criteria']
+            structured={'domain':'dining','criteria':c,'status':'needs_input' if result.get('status')=='needs_details' else 'completed'}
+            if structured['status']=='needs_input':structured['missing_fields']=result['missing']
+            else:structured.update(available=result['available'],options=[{'name':c['venue'],'times':result['slots']}] if result['available'] else [])
+            database.event(run,'availability_result',{'results':[structured]})
+        return result
+    service.availability.delegate=legacy_delegate
     return service
 
 

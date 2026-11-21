@@ -29,9 +29,9 @@ function appendBackgroundChat(rows=[]){
 function renderBackground(data){
   appendBackgroundChat(data.chat_updates);
   const unread=data.notifications.filter(n=>!n.read_at);
-  $('alerts').hidden=!unread.length&&!data.watches.some(w=>w.status==='needs_details');
+  $('alerts').hidden=!unread.length&&!data.watches.some(w=>['needs_details','active'].includes(w.status))&&!(data.monitors||[]).length;
   $('alerts').dataset.unread=String(unread.length);
-  $('alerts').textContent='Alerts'+(unread.length?' · '+unread.length:'');
+  $('alerts').textContent=unread.length?'Alerts · '+unread.length:'Background tasks';
   const fresh=unread.find(n=>!backgroundSeen.has(n.id));
   if(fresh){$('background-toast').textContent=fresh.title+': '+fresh.body;$('background-toast').dataset.notice=String(fresh.id);$('background-toast').hidden=false;}
   if(!unread.some(n=>String(n.id)===$('background-toast').dataset.notice))$('background-toast').hidden=true;
@@ -46,9 +46,16 @@ function renderBackground(data){
   backgroundText('p',data.profile?data.profile.summary:'No current consolidated profile yet. Existing long-term facts remain available.',memory);
   backgroundText('p',data.memory_review?'Last review: '+data.memory_review.status+' · '+new Date(data.memory_review.created*1000).toLocaleString():'Reviews run while you are idle and repeat only when memory changes.',memory,'background-note');
   backgroundButton('Review memory',memory,async()=>{await api('/background/memory','POST',{});await refreshBackground();});
+  for(const monitor of data.monitors||[]){
+    const card=backgroundText('div','',panel,'background-card');backgroundText('h3','Availability monitor · '+monitor.state,card);
+    const interval=Math.max(60,monitor.interval_seconds||300);backgroundText('p','Every '+(interval%60===0?interval/60+' minute'+(interval===60?'':'s'):interval+' seconds'),card);
+    backgroundText('p',(monitor.queries||[]).map(q=>{const c=q.criteria;return (c.venue||c.hotel||c.carrier||c.destination||q.domain)+' · '+(c.date||c.check_in||c.departure_date||'')+(q.state==='expired'?' (expired)':'');}).join('; '),card);
+    backgroundText('p','Last check: '+(monitor.last_check?new Date(monitor.last_check*1000).toLocaleString():'Pending')+' · Next check: '+(monitor.next_check?new Date(monitor.next_check*1000).toLocaleString():'—'),card);
+    if(['active','pending'].includes(monitor.state))backgroundButton('Cancel monitor',card,async()=>{await api('/background/monitors/'+monitor.id+'/cancel','POST',{});await refreshBackground();});
+  }
   for(const watch of data.watches){
-    const card=backgroundText('div','',panel,'background-card');backgroundText('h3',(watch.criteria.venue||'Dining')+' watch · '+watch.status,card);
-    const c=watch.criteria;backgroundText('p',[c.location,c.date,c.party_size?c.party_size+' guests':''].filter(Boolean).join(' · '),card);
+    const card=backgroundText('div','',panel,'background-card');backgroundText('h3',(watch.criteria.venue||watch.criteria.hotel||watch.criteria.carrier||watch.criteria.domain||'Dining')+' watch · '+watch.status,card);
+    const c=watch.criteria;backgroundText('p',[c.location||c.destination,c.date||c.check_in||c.departure_date,c.party_size?c.party_size+' guests':''].filter(Boolean).join(' · '),card);
     if(watch.status==='needs_details'){
       const form=document.createElement('form');form.dataset.watch=watch.id;const draft=backgroundDrafts.get(watch.id)||{};
       for(const [name,label,type,value] of [['location','Location / city','text',c.location||''],['date','Date','date',c.date||''],['party_size','Party size','number',c.party_size||2]]){
@@ -64,7 +71,7 @@ function renderBackground(data){
         }catch(e){error(e);submit.disabled=false;}};
       card.append(form);
     }
-    if(['needs_details','active'].includes(watch.status))backgroundButton('Cancel dining watch',card,async()=>{await api('/background/watches/'+watch.id+'/cancel','POST',{});await refreshBackground();});
+    if(['needs_details','active'].includes(watch.status))backgroundButton('Cancel '+(c.domain||'dining')+' watch',card,async()=>{await api('/background/watches/'+watch.id+'/cancel','POST',{});await refreshBackground();});
   }
   backgroundText('h3','Notifications',panel);
   if(!unread.length)backgroundText('p','No unread alerts.',panel,'background-note');
@@ -82,7 +89,7 @@ async function refreshBackground(){
   if(!user)return;
   let delay=15000;
   try{const data=await api('/background');if(generation!==backgroundGeneration||account?.username!==user)return;
-    renderBackground(data);if(data.watches.some(w=>w.status==='active'))delay=1000;
+    renderBackground(data);if(data.watches.some(w=>w.status==='active')||(data.monitors||[]).some(m=>m.state==='active'))delay=1000;
   }catch{if(generation!==backgroundGeneration||account?.username!==user)return;}
   backgroundTimer=setTimeout(refreshBackground,delay);
 }

@@ -43,13 +43,16 @@ class Dining:
         self.worker=None;self.worker_task=None
 
     async def call_company(self,tool_name,query):
-        async with streamable_http_client(self.company_url) as (read,write,_):
-            async with ClientSession(read,write) as session:
-                await session.initialize()
-                result=await session.call_tool(tool_name,query)
-                if result.isError:raise RuntimeError('Company dining request failed')
-                response=result.structuredContent
-                if response is None:response=json.loads(next(c.text for c in result.content if c.type=='text'))
+        from availability.security import Security
+        import httpx
+        async with httpx.AsyncClient(headers=Security(config.RUNTIME).headers(),timeout=20) as http:
+            async with streamable_http_client(self.company_url,http_client=http) as (read,write,_):
+                async with ClientSession(read,write) as session:
+                    await session.initialize()
+                    result=await session.call_tool(tool_name,query)
+                    if result.isError:raise RuntimeError('Company dining request failed')
+                    response=result.structuredContent
+                    if response is None:response=json.loads(next(c.text for c in result.content if c.type=='text'))
         if (not isinstance(response,dict) or any(response.get(k)!=v for k,v in query.items())
             or type(response.get('available')) is not bool or not isinstance(response.get('slots'),list)
             or any(not isinstance(slot,str) for slot in response['slots'])):

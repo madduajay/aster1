@@ -9,6 +9,12 @@ from personal_agent.app import create_app
 from personal_agent.db import Database
 
 
+@pytest.fixture(autouse=True)
+def no_external_venue_photo_requests(monkeypatch):
+    async def unavailable(*args,**kwargs):raise ConnectionError('Unit tests do not fetch public venue pages')
+    monkeypatch.setattr('availability.media.fetch',unavailable)
+
+
 @pytest.fixture
 def database(tmp_path, monkeypatch):
     monkeypatch.setattr(config, 'RUNTIME', tmp_path)

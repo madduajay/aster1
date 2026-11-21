@@ -58,11 +58,12 @@ async def test_details_persist_before_action_record_and_are_owned(client,databas
     items=load_diagnostics(database,user,run='browser-run')
     assert items[0]['target']['index']==71
     event=json.loads(database.one("SELECT payload FROM events WHERE kind='diagnostic'")['payload'])
-    assert 'KeyError' in event['text']
+    assert 'KeyError' not in event['text'] and event['details']['error_class']=='KeyError'
     database.execute("UPDATE browser_use_tasks SET status='completed',result=? WHERE id='browser-task'",(json.dumps({'status':'unverified','verification':{'reason':'Target inspection failed.'}}),))
     service=Service(database,SimpleNamespace(model=None))
     result=service.browser_outcome(user,'browser-run','Fallback answer')
-    assert 'KeyError' in result and 'Source:' in result and 'index=71' in result
+    assert 'KeyError' not in result and 'Source:' not in result and 'index=71' not in result
+    assert 'check the current page' in result
     assert 'KeyError' in service.command(user,sid,0,'/debug')
     assert 'No browser exception' in service.command(user,database.new_session(user),0,'/debug')
     authenticate(client,credentials,'user01')
@@ -118,11 +119,11 @@ async def test_debug_details_visible_in_https_chat_and_after_reload(database,use
             errors=[];page.on('pageerror',lambda e:errors.append(str(e)))
             await page.goto(config.ORIGIN);await page.locator('#username').fill('user01');await page.locator('#password').fill(credentials['user01']);await page.locator('#password').press('Enter');await page.locator('#password-form').wait_for(state='visible');await page.locator('#new-password').fill('diagnostic-ui-test-password');await page.locator('#new-password').press('Enter');await page.locator('#composer').wait_for(state='visible')
             await page.locator('#input').fill('Open a product');await page.locator('#input').press('Enter')
-            await expect(page.locator('#messages')).to_contain_text('Browser debug details:')
+            await expect(page.locator('#messages')).to_contain_text('Please check the current page')
             for text in ['KeyError','backendNodeId','resolve_target_reference','test_diagnostics.py:','index=71','Action dispatched: no']:
-                await expect(page.locator('#messages')).to_contain_text(text)
+                await expect(page.locator('#messages')).not_to_contain_text(text)
             await until(lambda:not service.active(users[0]['id']))
-            await page.reload();await expect(page.locator('#messages')).to_contain_text('KeyError')
+            await page.reload();await expect(page.locator('#messages')).not_to_contain_text('KeyError')
             await page.locator('#input').fill('/debug');await page.locator('#input').press('Enter')
             await expect(page.locator('#messages .assistant').last).to_contain_text('resolve_target_reference')
             assert not errors

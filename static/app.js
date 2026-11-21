@@ -45,39 +45,76 @@ async function api(path, method='GET', body) {
   return response.json();
 }
 function error(e) {if(e?.silent)return;$('error').textContent=e?.message||'';}
+function venuePhoto(path,alt){
+  const image=document.createElement('img');image.className='venue-photo';image.src=path;image.alt=alt||'Venue photo';image.loading='lazy';image.decoding='async';
+  image.onerror=()=>{const placeholder=document.createElement('span');placeholder.className='venue-photo-placeholder';placeholder.textContent='Photo unavailable';placeholder.setAttribute('role','img');placeholder.setAttribute('aria-label','Photo unavailable');image.replaceWith(placeholder);};
+  return image;
+}
+function normalizeVenuePhotos(text){
+  // Accept escaped Markdown delimiters only for the authenticated photo route.
+  return text.replace(/!\[([^\]\n]{0,250})\]\\\((\/api\/venue-photos\/[a-f0-9]{64})\\\)/g,'![$1]($2)');
+}
 function inlineText(node, text) {
-  // Build a small Markdown subset with DOM nodes; model HTML stays literal text.
-  const pattern=/\[([^\]\n]{1,300})\]\((https?:\/\/[^\s)]+)\)|\*\*([^*\n]+)\*\*|`([^`\n]+)`/g;
+  text=normalizeVenuePhotos(text);
+  // Only server-cached venue photos can become images; model HTML stays text.
+  const pattern=/!\[(?<alt>[^\]\n]{0,250})\]\((?<photo>\/api\/venue-photos\/[a-f0-9]{64})\)|\[(?<label>[^\]\n]{1,300})\]\((?<url>https?:\/\/[^\s)]+)\)|\*\*(?<bold>[^*\n]+)\*\*|`(?<code>[^`\n]+)`/g;
   let last=0, match;
   while ((match=pattern.exec(text))) {
     node.append(document.createTextNode(text.slice(last, match.index)));
-    if(match[1]) {
-      const a=document.createElement('a'); inlineText(a,match[1]); a.href=match[2]; a.target='_blank'; a.rel='noopener noreferrer'; node.append(a);
-    } else {
-      const span=document.createElement(match[3]?'strong':'code');if(match[3])inlineText(span,match[3]);else span.textContent=match[4];node.append(span);
-    }
+    const part=match.groups;
+    if(part.photo)node.append(venuePhoto(part.photo,part.alt));
+    else if(part.label){const a=document.createElement('a');inlineText(a,part.label);a.href=part.url;a.target='_blank';a.rel='noopener noreferrer';node.append(a);}
+    else{const span=document.createElement(part.bold?'strong':'code');if(part.bold)inlineText(span,part.bold);else span.textContent=part.code;node.append(span);}
     last=pattern.lastIndex;
   }
   node.append(document.createTextNode(text.slice(last)));
+}
+function venueCell(node,text){
+  text=normalizeVenuePhotos(text);
+  const photo=text.match(/^!\[([^\]]*)\]\((\/api\/venue-photos\/[a-f0-9]{64})\)\s*/);
+  if(!photo){inlineText(node,text);return;}
+  const preview=document.createElement('div');preview.className='venue-preview';preview.append(venuePhoto(photo[2],photo[1]));
+  const copy=document.createElement('div');copy.className='venue-copy';const rest=text.slice(photo[0].length),leadLink=rest.match(/^\[[^\]\n]+\]\(https?:\/\/[^\s)]+\)/),divider=rest.indexOf(' — ',leadLink?leadLink[0].length:0);
+  const name=document.createElement('div');name.className='venue-name';inlineText(name,divider<0?rest:rest.slice(0,divider));copy.append(name);
+  if(divider>=0){const description=document.createElement('p');description.className='venue-description';description.textContent=rest.slice(divider+3);copy.append(description);}
+  preview.append(copy);node.append(preview);
 }
 function links(node, text) {
   node._messageText=text;
   node.replaceChildren();
   if(!node.classList.contains('assistant')){inlineText(node,text);return;}
   let paragraph=null,list=null,code=null;
-  for(const line of text.replace(/\r\n?/g,'\n').split('\n')) {
+  const lines=text.replace(/\r\n?/g,'\n').split('\n');
+  const cells=line=>line.trim().replace(/^\|/,'').replace(/\|$/,'').split(/(?<!\\)\|/).map(value=>value.trim().replace(/\\\|/g,'|'));
+  for(let index=0;index<lines.length;index++) {
+    const line=lines[index];
     if(/^\s*```/.test(line)) {
       if(code){code=null;}else{const pre=document.createElement('pre');code=document.createElement('code');pre.append(code);node.append(pre);}
       paragraph=null;list=null;continue;
     }
     if(code){code.append(document.createTextNode((code.childNodes.length?'\n':'')+line));continue;}
-    if(!line.trim()){paragraph=null;list=null;continue;}
+    // Blank lines make a loose Markdown list; they do not split each venue
+    // into a separate white response card.
+    if(!line.trim()){paragraph=null;continue;}
+    if(line.trim().startsWith('|')&&index+1<lines.length&&/^\|?\s*:?-{3,}:?\s*(?:\|\s*:?-{3,}:?\s*)+\|?$/.test(lines[index+1].trim())) {
+      const wrap=document.createElement('div');wrap.className='response-table';
+      const table=document.createElement('table'),head=document.createElement('thead'),body=document.createElement('tbody');
+      const headers=cells(line),row=document.createElement('tr');
+      for(const label of headers){const th=document.createElement('th');th.scope='col';inlineText(th,label);row.append(th);}
+      head.append(row);table.append(head,body);index++;
+      while(index+1<lines.length&&lines[index+1].trim().startsWith('|')) {
+        const values=cells(lines[++index]),tr=document.createElement('tr');
+        for(let column=0;column<headers.length;column++){const td=document.createElement('td');if(column===0&&['Hotel','Venue','Item','Product','Option'].includes(headers[0]))venueCell(td,values[column]||'');else inlineText(td,values[column]||'');tr.append(td);}
+        body.append(tr);
+      }
+      wrap.append(table);node.append(wrap);paragraph=null;list=null;continue;
+    }
     const bullet=line.match(/^\s*(?:[-*+•]\s+|#{1,6}\s+)(.+)$/);
     const ordered=line.match(/^\s*(\d+)[.)]\s+(.+)$/);
     if(bullet||ordered) {
       const tag=ordered?'ol':'ul';
       if(!list||list.tagName.toLowerCase()!==tag){list=document.createElement(tag);if(ordered)list.start=Number(ordered[1]);node.append(list);}
-      const item=document.createElement('li');inlineText(item,bullet?bullet[1]:ordered[2]);list.append(item);paragraph=null;
+      const item=document.createElement('li');const itemText=bullet?bullet[1]:ordered[2];if(itemText.startsWith('![')){item.className='venue-item';list.classList.add('venue-list');venueCell(item,itemText);}else inlineText(item,itemText);list.append(item);paragraph=null;
     } else {
       list=null;
       if(!paragraph){paragraph=document.createElement('p');node.append(paragraph);}else{paragraph.append(document.createTextNode('\n'));}

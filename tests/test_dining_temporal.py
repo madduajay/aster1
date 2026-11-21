@@ -22,7 +22,7 @@ async def test_signal_resumes_workflow_after_worker_restart_without_duplicate_al
         handle=cleanup.environment.client.get_workflow_handle('aster-dining-'+watch['id'])
         result=await submit_agent(service,uid, database.new_session(uid),QUERY.replace('Carbone','Nobu'))
         assert '18:30, 19:00, 19:30' in result['reply']
-        assert 'already active' in (await submit_agent(service,uid,sid,QUERY))['reply']
+        assert 'currently unavailable' in (await submit_agent(service,uid,sid,QUERY))['reply']
         await submit_agent(service,uid,database.new_session(uid),QUERY.replace('for 2','for 3'))
         cancelled=database.one("SELECT id FROM dining_watches WHERE criteria LIKE '%\"party_size\": 3%'")['id']
         service.background.cancel_watch(uid,cancelled)

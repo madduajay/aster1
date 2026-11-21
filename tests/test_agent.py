@@ -65,7 +65,7 @@ async def test_real_deepagents_context_and_session_digest(database, users, tmp_p
         assert database.one('SELECT status FROM runs WHERE id=?', (run,))['status'] == 'completed'
         assert 'quiet Phoenix hotels' in str(model.seen[0])
         assert 'Which one is downtown?' in str(model.seen[0])
-        assert set(model.offered) <= {'web_search', 'browser_task', 'current_time', 'search_dining', 'cancel_dining_watch', 'write_todos'}
+        assert set(model.offered) <= {'web_search', 'browser_task', 'current_time', 'delegate_dining','delegate_travel','cancel_availability', 'cancel_dining_watch', 'compose_trip','write_todos'}
         assert digest.inputs
         assert database.owned_session(uid, sid)['summary'].endswith('User chose a quiet downtown Phoenix hotel.')
         await engine.client.close()
@@ -129,6 +129,8 @@ async def test_provider_error_retains_communication(database, users, tmp_path):
     rows = database.rows('SELECT * FROM messages WHERE session_id=? ORDER BY id', (sid,))
     assert rows[0]['content'] == 'Do not lose this request'
     assert 'conversation is saved' in rows[-1]['content']
+    assert 'RuntimeError' not in rows[-1]['content'] and 'Controlled provider failure' not in rows[-1]['content']
+    assert database.one('SELECT error FROM runs WHERE id=?',(run,))['error']=='RuntimeError'
     assert database.one('SELECT status FROM runs WHERE id=?', (run,))['status'] == 'failed'
 
 

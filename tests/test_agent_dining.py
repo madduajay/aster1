@@ -21,7 +21,7 @@ async def test_agent_calls_company_first_and_starts_no_workflow_for_available_ve
         assert [name for name,_ in calls]==['search_dining']
         assert not service.dining.client.requests
         assert not database.rows('SELECT id FROM background_jobs')
-        assert service.engine.model.choices[0]=={'type':'function','function':{'name':'search_dining'}}
+        assert service.engine.model.choices[0]=={'type':'function','function':{'name':'delegate_dining'}}
         assert database.one('SELECT searches FROM run_usage')['searches']==0
         assert database.one("SELECT status FROM dining_watches")['status']=='available'
     finally:await service.close();await service.engine.client.close()
@@ -43,7 +43,7 @@ async def test_agent_lookup_precedes_unavailable_only_workflow_and_retry_reuses_
         assert [name for name,_ in calls]==['search_dining','search_dining']
         assert calls[0][1]==calls[1][1]
         messages=service.engine.model.seen[1]
-        assert any(call['name']=='search_dining' for m in messages for call in getattr(m,'tool_calls',[]))
+        assert any(call['name']=='delegate_dining' for m in messages for call in getattr(m,'tool_calls',[]))
         assert any(m.type=='tool' and json.loads(m.content).get('watch_status')=='active' for m in messages)
         assert not service.background.snapshot(uid)['notifications']
     finally:await service.close();await service.engine.client.close()
@@ -72,7 +72,7 @@ async def test_failed_company_lookup_does_not_create_a_temporal_watch(database,u
     fake_company(service);service.dining.call_company=AsyncMock(side_effect=ConnectionError('controlled'))
     try:
         uid=users[0]['id'];result=await submit_agent(service,uid,database.new_session(uid),'Check Carbone availability in New York on 2099-12-01 for 2.')
-        assert 'could not check' in result['reply']
+        assert 'could not be checked' in result['reply']
         assert not service.dining.client.requests and not database.rows('SELECT id FROM background_jobs')
     finally:await service.close();await service.engine.client.close()
 
@@ -126,7 +126,7 @@ async def test_restaurant_discovery_must_be_followed_by_company_lookup(database,
             'Find Indian restaurants around Phoenix with tables on 2099-12-01 for 2.')
         assert service.engine.model.choices[:2]==[
             {'type':'function','function':{'name':'web_search'}},
-            {'type':'function','function':{'name':'search_dining'}}]
+            {'type':'function','function':{'name':'delegate_dining'}}]
         assert calls[0][1]['venue']=='Peacock Indian Bar & Grill'
         assert '18:30' in result['reply'] and not service.dining.client.requests
     finally:await service.close();await service.engine.client.close()

@@ -98,6 +98,7 @@ def create_app(database=None, service=None):
             app.state.db, app.state.service = db, Service(db, engine)
             app.state.service.recover()
             await app.state.service.dining.start()
+            await app.state.service.availability.start()
             app.state.service.background.start()
             try:
                 yield
@@ -158,7 +159,15 @@ def create_app(database=None, service=None):
 
     @app.exception_handler(ValueError)
     async def invalid(request, exc):
-        return Response(str(exc), status_code=409)
+        from .public_errors import request_error
+        return Response(request_error(exc), status_code=409)
+
+    @app.exception_handler(Exception)
+    async def unexpected(request,exc):
+        import logging
+        from .public_errors import REQUEST_FAILURE
+        logging.getLogger(__name__).error('Request failed (%s)',type(exc).__name__)
+        return Response(REQUEST_FAILURE,status_code=500)
 
     @app.get('/api/health')
     def health():
@@ -228,7 +237,14 @@ def create_app(database=None, service=None):
     @app.get('/api/background')
     def background_status(request:Request,uid=Depends(user)):
         manager=getattr(request.app.state.service,'background',None)
-        return manager.snapshot(uid) if manager else {'watches':[],'notifications':[],'profile':None,'memory_job':None,'memory_review':None}
+        result=manager.snapshot(uid) if manager else {'watches':[],'notifications':[],'profile':None,'memory_job':None,'memory_review':None}
+        gateway=getattr(request.app.state.service,'availability',None)
+        result['monitors']=gateway.monitors(uid) if gateway else []
+        return result
+
+    @app.post('/api/background/monitors/{mid}/cancel')
+    async def cancel_monitor(mid:str,request:Request,uid=Depends(user)):
+        return await request.app.state.service.availability.cancel(mid,uid)
 
     @app.post('/api/background/memory')
     def queue_memory_review(request:Request,uid=Depends(user)):
@@ -245,7 +261,8 @@ def create_app(database=None, service=None):
         return {**result,'session_id':watch['session_id']}
 
     @app.post('/api/background/watches/{wid}/cancel')
-    def cancel_dining(wid:str,request:Request,uid=Depends(user)):
+    async def cancel_dining(wid:str,request:Request,uid=Depends(user)):
+        if wid.startswith('av-'):return await request.app.state.service.availability.cancel_watch(wid,uid)
         request.app.state.service.background.cancel_watch(uid,wid)
         return {'cancelled':True}
 
@@ -308,6 +325,7 @@ def create_app(database=None, service=None):
         row = db(request).one("SELECT id,session_id,status,approval,approval_id,error FROM runs WHERE id=? AND user_id=?", (rid, uid))
         if not row:
             raise HTTPException(404)
+        if row.get('error'):row['error']='This request could not be completed.'
         return row
 
     @app.post('/api/runs/{rid}/cancel')
@@ -402,6 +420,11 @@ def create_app(database=None, service=None):
                 batch = db(request).rows("SELECT * FROM events WHERE run_id=? AND id>? ORDER BY id LIMIT 100", (rid, cursor))
                 for event in batch:
                     cursor = event['id']
+                    if event['kind'] not in {'token','progress','diagnostic','answer','artifact','approval','input','done','sources'}:continue
+                    if event['kind']=='diagnostic':event['payload']=json.dumps({'text':'A website step needs attention.'})
+                    elif event['kind'] in {'answer','token'}:
+                        from .public_errors import customer_text
+                        event['payload']=json.dumps(customer_text(json.loads(event['payload'])))
                     yield f"id: {cursor}\nevent: {event['kind']}\ndata: {event['payload']}\n\n"
                 state = db(request).one("SELECT status FROM runs WHERE id=?", (rid,))['status']
                 if state not in {'running', 'resuming'} and len(batch) < 100:
@@ -440,6 +463,17 @@ def create_app(database=None, service=None):
             raise HTTPException(404)
         return FileResponse(row['path'], media_type=row['media'], filename=row['filename'],
                             content_disposition_type='inline' if row['media'] in IMAGE_MEDIA else 'attachment')
+
+    @app.get('/api/venue-photos/{venue_key}')
+    def venue_photo(venue_key:str,request:Request,uid=Depends(user)):
+        import re
+        if not re.fullmatch(r'[a-f0-9]{64}',venue_key):raise HTTPException(404)
+        row=request.app.state.service.availability.store.one('SELECT value FROM venue_metadata WHERE id=?',(venue_key,))
+        value=json.loads(row['value']) if row else {};image_id=value.get('image_id','')
+        if not isinstance(image_id,str) or not re.fullmatch(r'[a-f0-9]{64}',image_id):raise HTTPException(404)
+        path=config.RUNTIME/'venue-photos'/image_id
+        if not path.is_file():raise HTTPException(404)
+        return FileResponse(path,media_type=value['media'])
 
     @app.post('/api/uploads')
     async def upload(request: Request, session_id: str, draft: bool = False, uid=Depends(user)):

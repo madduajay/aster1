@@ -32,6 +32,9 @@ class Service:
         self.background = Background(self)
         self.dining = Dining(self)
         self.engine.dining = self.dining
+        from availability.gateway import Gateway
+        self.availability=Gateway(self)
+        self.engine.availability=self.availability
 
     def recover(self):
         # Paused approvals survive; in-flight actions never auto-resume after restart.
@@ -62,12 +65,7 @@ class Service:
                 verification=result.get('verification',{})
                 if result.get('status')=='rejected':return 'Action cancelled. Nothing further was submitted.'
                 if result.get('status')!='verified':
-                    attempts=result.get('recovery_attempts',[])
-                    report=''
-                    if attempts:report='\nRecovery attempts: '+', '.join(dict.fromkeys(a['operation']+' ('+a['phase']+')' for a in attempts))+'.'
-                    details=load_diagnostics(self.db,user,run=run)
-                    return ('Browser task '+result.get('status',task['status'])+': '+verification.get('reason',result.get('message','The result is not verified.'))+
-                            report+'\nInspect the current website before repeating a submission.'+ ('\n\n'+debug_text(details) if details else ''))
+                    return 'I couldn’t confirm that the website completed your request. Please check the current page before trying again.'
                 clean='\n'.join(line for line in text.splitlines() if not re.search(r'please confirm|would you like|shall i|before i|ready to|only after your approval',line,re.I))
                 return 'Verified browser result: '+verification.get('reason','The requested result was observed.')+'\n\n'+clean
         return text
@@ -299,6 +297,14 @@ class Service:
             latest = current['content']
             context['current_user_message'] = current
             context['session_id'] = session
+            requested=self.db.one("""SELECT e.id,m.content FROM events e JOIN runs r ON r.id=e.run_id
+                JOIN messages m ON m.id=json_extract(e.payload,'$.source_message')
+                WHERE r.user_id=? AND r.session_id=? AND e.kind='trip_requested' ORDER BY e.id DESC LIMIT 1""",(user,session))
+            completed=self.db.one("SELECT e.id FROM events e JOIN runs r ON r.id=e.run_id WHERE r.user_id=? AND r.session_id=? AND e.kind='trip_plan' AND e.id>?",(user,session,requested['id'])) if requested else None
+            context['pending_trip_plan']=requested['content'] if requested and not completed else ''
+            context['pending_availability']=self.availability.pending(user,session,self.db.owned_session(user,session)['context_floor'])
+            context['recent_availability']=self.availability.recent(user,session,self.db.owned_session(user,session)['context_floor'])
+            context['availability_monitors']=self.availability.store.rows("SELECT id,envelope,state FROM monitors WHERE user_id=? AND session_id=? AND state IN ('active','pending')",(user,session))
             context['dining_watches']=self.db.rows("SELECT id,criteria,status FROM dining_watches WHERE user_id=? AND session_id=? AND status IN ('needs_details','active') ORDER BY created DESC LIMIT 5",(user,session))
             context['attached_files']=self.db.rows('''SELECT a.id,a.filename,a.media FROM message_attachments ma
                 JOIN artifacts a ON a.id=ma.artifact_id JOIN messages m ON m.id=ma.message_id
@@ -335,7 +341,7 @@ class Service:
                                     while '\n' in pending:
                                         line, pending = pending.split('\n', 1)
                                         sources = evidence_sources(self.db, run)
-                                        if not self.unverified_research(run, sources) and not self.unchecked_dining(run):
+                                        if not self.unverified_research(run, sources) and not self.unchecked_dining(run) and not self.db.one("SELECT id FROM events WHERE run_id=? AND kind IN ('availability_required','availability_pending') LIMIT 1",(run,)):
                                             clean = vetted_text(line + '\n', sources, empty_fallback=False)
                                             if clean:
                                                 self.db.event(run, 'token', clean)
@@ -364,7 +370,18 @@ class Service:
             sources = evidence_sources(self.db, run)
             buffer = self.browser_outcome(user,run,buffer)
             buffer = vetted_text(buffer, sources)
-            if self.unchecked_dining(run):
+            structured=self.db.rows("SELECT payload FROM events WHERE run_id=? AND kind='availability_result' ORDER BY id",(run,))
+            plan=self.db.one("SELECT payload FROM events WHERE run_id=? AND kind='trip_plan' ORDER BY id DESC LIMIT 1",(run,))
+            if structured:
+                from availability.presentation import availability_text,render
+                results=[json.loads(row['payload']) for row in structured]
+                buffer=render(json.loads(plan['payload'])) if plan else availability_text(results,trip=bool(self.db.one("SELECT id FROM events WHERE run_id=? AND kind='trip_requested' LIMIT 1",(run,))))
+                if not plan and self.db.one("SELECT id FROM events WHERE run_id=? AND kind='trip_requested' LIMIT 1",(run,)) and not any(r['status']=='needs_input' for g in results for r in g['results']):buffer+='\n\nThe day-by-day itinerary could not be completed; the checked options are listed above.'
+                from availability.intervals import label
+                intervals={r.get('interval_seconds',300) for r in results if r.get('status')=='monitoring'}
+                for interval in sorted(intervals):buffer+='\n\nI’ll check every '+label(interval)+' and post changes here.'
+                self.db.event(run,'token',buffer)
+            elif self.unchecked_dining(run):
                 candidates=unverified_link_candidates(buffer)
                 buffer="I couldn't check dining availability. Any suggested restaurants are candidates; their table times have not been confirmed."
                 if candidates:buffer+='\n\n'+vetted_text(candidates,[])
@@ -374,14 +391,24 @@ class Service:
                 candidates=unverified_link_candidates(buffer)
                 buffer = note + ('\n\n'+vetted_text(candidates,[]) if candidates else '')
                 self.db.event(run, 'token', buffer)
+            elif self.db.one("SELECT id FROM events WHERE run_id=? AND kind IN ('availability_required','availability_pending') LIMIT 1",(run,)):
+                buffer='I couldn’t complete the availability check. No availability is confirmed. Please try again.'
+                self.db.event(run,'token',buffer)
             elif pending:
                 clean = vetted_text(pending, sources, empty_fallback=False)
                 if clean:
                     self.db.event(run, 'token', clean)
-            if sources:
+            visualized=False
+            if sources and not structured and self.db.one("SELECT id FROM events WHERE run_id=? AND kind='visual_recommendations' LIMIT 1",(run,)):
+                from availability.media import decorate_items
+                buffer=await decorate_items(self.availability.store,buffer,sources)
+                visualized='/api/venue-photos/' in buffer
+            if sources and not plan and not structured and not visualized:
                 buffer += '\n\nSources:\n' + '\n'.join(f"[{s['title']}]({s['url']})" for s in sources)
             buffer = vetted_text(buffer, sources)
             buffer = buffer or "No response was produced. Please try a more specific request."
+            from .public_errors import customer_text
+            buffer=customer_text(buffer)
             mid = self.db.message(user, session, 'assistant', buffer)
             self.db.record_dependencies(user, session, mid, dependencies)
             self.db.event(run, 'answer', buffer)
@@ -397,8 +424,12 @@ class Service:
             self.db.event(run, 'answer', body)
         except Exception as exc:
             status = 'failed'
+            limits={'Model-call limit reached':'model_calls','Context limit reached; conversation retained. Start a new chat or retry summarization.':'context'}
+            if type(exc) is RuntimeError and str(exc) in limits:self.db.event(run,'planner_limit',{'reason':limits[str(exc)]})
             buffer = vetted_text(buffer, evidence_sources(self.db, run))
-            body = (buffer + '\n\n' if buffer else '') + f"The run stopped ({type(exc).__name__}). Your conversation is saved. Inspect the browser before repeating an action."
+            body="I couldn’t complete this request. Your conversation is saved. Please try again."
+            if self.db.one("SELECT name FROM sqlite_master WHERE name='browser_use_tasks'") and self.db.one("SELECT id FROM browser_use_tasks WHERE run_id=? LIMIT 1",(run,)):
+                body="I couldn’t complete this request. Your conversation is saved. Check the website’s current state before trying again."
             mid = self.db.message(user, session, 'assistant', body)
             self.db.record_dependencies(user, session, mid, dependencies)
             self.db.event(run, 'answer', body)
@@ -455,6 +486,7 @@ class Service:
 
     async def close(self):
         await self.background.stop()
+        await self.availability.close()
         await self.dining.close()
         tasks = list(self.tasks.values())
         for task in tasks:
