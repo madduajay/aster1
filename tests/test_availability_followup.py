@@ -19,6 +19,7 @@ from personal_agent.agent import ResearchDecision
     ('1 room','hotels',['rooms'],{'travel'}),('one room','hotels',['rooms'],{'travel'}),
     ('2 adults','hotels',['guests'],{'travel'}),('2 passengers','flights',['passengers'],{'travel'}),
     ('From Phoenix','flights',['origin'],{'travel'}),('Business class','flights',['cabin'],{'travel'}),
+    ('any airport is fine','flights',['origin'],{'travel'}),
     ('2026-12-01','dining',['date'],{'dining'}),('2 people','dining',['party_size'],{'dining'}),
     ('hello','hotels',['rooms'],set()),('My favorite number is 1','hotels',['rooms'],set()),
     ('1 room','flights',['origin'],set()),('Cancel my trip','hotels',['rooms'],set())])
@@ -94,17 +95,23 @@ async def test_hotel_mentions_tolerate_generic_words_without_allowing_substituti
 
 @pytest.mark.parametrize('reply,status,partial,origin,cabin',[
     ('From Phoenix','needs_input',{'destination':'Paris'},'Phoenix','economy'),
+    ('any airport is fine','needs_input',{'destination':'Paris'},'Los Angeles','economy'),
     ('Make that business class','completed',{'cabin':'business'},'Phoenix','business')])
 async def test_server_preserves_trip_when_model_omits_supplied_fields(database,users,reply,status,partial,origin,cabin):
     uid=users[0]['id'];sid=database.new_session(uid)
     previous={'destination':'Paris','departure_date':'2099-12-01','passengers':1,'cabin':'economy'}
     if status=='completed':previous['origin']='Phoenix'
-    source=database.message(uid,sid,'user','Check economy flights '+('from Phoenix ' if status=='completed' else '')+'to Paris on 2099-12-01, 1 passenger.')
+    source=database.message(uid,sid,'user','Check economy flights '+('from Phoenix ' if status=='completed' else 'from LA ' if reply=='any airport is fine' else '')+'to Paris on 2099-12-01, 1 passenger.')
     service=service_for(database,[AIMessage(content='',tool_calls=[{'name':'delegate_travel','args':{'queries':[{'domain':'flights','criteria':partial}]},'id':'flight','type':'tool_call'}]),AIMessage(content='Acknowledged.')])
     task=Task(request_id='flight-prior-request',user_id=uid,session_id=sid,source_message_id=source,queries=[{'domain':'flights','criteria':previous}])
     prior={'domain':'flights','criteria':previous,'status':status,'available':True,'options':[]}
     if status=='needs_input':prior['missing_fields']=['origin']
     service.availability.store.execute('INSERT INTO tasks VALUES(?,?,?,?,?,?,?)',(task.request_id,uid,sid,'travel',task.model_dump_json(),json.dumps({'results':[prior]}),time.time()))
+    if reply=='any airport is fine':
+        # Recover even after a previous follow-up already repeated the question.
+        repeated=database.message(uid,sid,'user','any airport is fine')
+        again=task.model_copy(update={'request_id':'repeated-airport-question','source_message_id':repeated})
+        service.availability.store.execute('INSERT INTO tasks VALUES(?,?,?,?,?,?,?)',(again.request_id,uid,sid,'travel',again.model_dump_json(),json.dumps({'results':[prior]}),time.time()+.01))
     router=AsyncMock(return_value=ResearchDecision(requires_research=False,travel_availability=False))
     service.engine.research_model=SimpleNamespace(with_structured_output=lambda *a,**k:SimpleNamespace(ainvoke=router))
     calls=[]

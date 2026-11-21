@@ -75,7 +75,7 @@ def validation_result(domain,raw,exc):
 
 FIELD_LABELS={'location':'city','date':'dining date','party_size':'party size','venue':'restaurant',
     'hotel':'hotel','destination':'destination','check_in':'check-in date','check_out':'check-out date',
-    'guests':'number of guests','rooms':'number of rooms','stars':'hotel star rating','origin':'departure airport',
+    'guests':'number of guests','rooms':'number of rooms','stars':'hotel star rating','origin':'departure city or airport',
     'departure_date':'departure date','return_date':'return date','passengers':'number of passengers','cabin':'cabin class',
     'preferred_time':'preferred dining time','meal':'breakfast, lunch or dinner'}
 
@@ -86,6 +86,7 @@ def input_question(result,label):
     if any(field not in allowed.get(result['domain'],set()) for field in fields):return label+': availability could not be checked.'
     if not fields or any(field not in FIELD_LABELS for field in fields):return label+': availability could not be checked.'
     if fields==['preferred_time']:return 'What time would you prefer for '+label+'? For example, 7:00 PM.'
+    if fields==['origin']:return 'Which city are you flying from? Any airport in that city is fine.'
     if reason=='past':return 'Which current or future '+FIELD_LABELS[fields[0]]+' would you like for '+label+'?'
     if reason=='order' and fields==['check_out']:return 'What check-out date would you like? It needs to be after check-in.'
     if reason=='order' and fields==['return_date']:return 'What return date would you like? It needs to be on or after departure.'

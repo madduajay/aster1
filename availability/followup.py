@@ -3,6 +3,19 @@ import re
 from .contracts import role_for
 
 
+def any_airport(text):
+    return bool(re.fullmatch(r'(?:any|either) airports?(?: (?:is |are )?(?:fine|okay|ok|works))?[.! ]*',text.strip(),re.I))
+
+
+def flight_origin(text):
+    """Recover an explicitly supplied departure city, without choosing one."""
+    match=re.search(r'\bfrom\s+([^,;\n]{2,80}?)\s+to\s+',text,re.I)
+    if not match:return None
+    value=match[1].strip()
+    if re.fullmatch(r'(?:any|either) airports?',value,re.I):return None
+    return 'Los Angeles' if value.casefold() in {'la','l.a.'} else value
+
+
 def room_counts(text):
     numbers={'a':1,'one':1,'two':2,'three':3,'four':4,'five':5,'six':6,'seven':7,'eight':8,'nine':9,'ten':10}
     found=re.findall(r'\b(\d{1,2}|a|one|two|three|four|five|six|seven|eight|nine|ten)\s+(?:(?:hotel|single|double|twin|family|deluxe|standard|connecting|adjoining)\s+){0,2}(?:rooms?|suites?|apartments?)\b',text.casefold())
@@ -64,6 +77,7 @@ def continuation_roles(text,pending,recent=()):
     elif re.fullmatch(count+r' (?:adults?|guests?|people|persons?|travelers?|travellers?|passengers?|diners?)',value):fields={'guests','passengers','party_size'}
     elif re.fullmatch(r'(?:make that |change to |actually )?(?:economy|premium economy|business(?: class)?|first(?: class)?)',value):fields={'cabin'}
     elif re.fullmatch(r'from [\w ,.-]{2,60}',value):fields={'origin'}
+    elif any_airport(value):fields={'origin','destination'}
     elif re.fullmatch(r'to [\w ,.-]{2,60}',value):fields={'destination'}
     elif re.fullmatch(r'\d{4}-\d{2}-\d{2}',value):fields={'date','check_in','check_out','departure_date','return_date'}
     elif re.fullmatch(r'(?:actually )?(?:change )?check[- ]?out (?:to )?\d{4}-\d{2}-\d{2}',value):fields={'check_out'}

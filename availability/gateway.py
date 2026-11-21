@@ -43,7 +43,22 @@ class Gateway:
                 superseded=any(r['domain']==domain and all(identity(domain,r['criteria']).get(k)==v for k,v in known.items()) for r in newer)
                 if result['status']=='needs_input' and not superseded:
                     try:
-                        normalized,missing=criteria(domain,result['criteria'])
+                        raw=dict(result['criteria'])
+                        if domain=='flights' and not raw.get('origin'):
+                            from .followup import flight_origin
+                            source=self.db.one("SELECT content FROM messages WHERE id=? AND session_id=? AND role='user'",(envelope['source_message_id'],session))
+                            origin=flight_origin(source['content']) if source else None
+                            if not origin:
+                                for previous in self.store.rows('SELECT envelope FROM tasks WHERE user_id=? AND session_id=? ORDER BY updated DESC LIMIT 30',(user,session)):
+                                    prior=json.loads(previous['envelope'])
+                                    if not floor<prior['source_message_id']<=envelope['source_message_id']:continue
+                                    related=any(q['domain']=='flights' and all(identity('flights',q['criteria']).get(k)==identity('flights',raw).get(k) for k in ('destination','departure_date','return_date')) for q in prior['queries'])
+                                    if not related:continue
+                                    evidence=self.db.one("SELECT content FROM messages WHERE id=? AND session_id=? AND role='user'",(prior['source_message_id'],session))
+                                    origin=flight_origin(evidence['content']) if evidence else None
+                                    if origin:break
+                            if origin:raw['origin']=origin
+                        normalized,missing=criteria(domain,raw)
                         pending.append({**result,'criteria':normalized,'missing_fields':missing,'status':'needs_input' if missing else 'ready_for_check'})
                     except (ValueError,TypeError):pending.append(result)
                 newer.append(result)
@@ -111,7 +126,7 @@ class Gateway:
             raw=expanded
         queries=[Query.model_validate({'domain':q.get('domain'),'criteria':q.get('criteria',{}),'research':q.get('research',False)}) for q in raw]
         if any(role_for(q.domain)!=role for q in queries):raise ValueError('Unsupported delegation domain')
-        from .followup import room_counts,party_counts,cabins,cabin_value,explicit_reply,star_ratings
+        from .followup import room_counts,party_counts,cabins,cabin_value,explicit_reply,star_ratings,flight_origin
         from .contracts import canonical
         floor=self.db.owned_session(user,owned['session_id'])['context_floor']
         drafts=self.pending(user,owned['session_id'],floor)
@@ -125,6 +140,9 @@ class Gateway:
             candidates=[d for d in basis if d['domain']==query.domain and (correction or all(not incoming.get(k) or not identity(d['domain'],d['criteria']).get(k) or incoming[k]==identity(d['domain'],d['criteria'])[k] for k in ('hotel','venue','destination','origin','location')))]
             if len(candidates)==1:query.criteria={**candidates[0]['criteria'],**{k:v for k,v in query.criteria.items() if v not in ('',None)}}
             query.criteria.update(explicit_reply(source['content'],query.domain))
+            if query.domain=='flights':
+                origin=flight_origin(source['content'])
+                if origin:query.criteria['origin']=origin
             fields={'hotels':{'rooms':room_counts,'guests':party_counts,'stars':star_ratings},'flights':{'passengers':party_counts,'cabin':cabins},'dining':{'party_size':party_counts}}[query.domain]
             for field,parse in fields.items():
                 known=parse(source['content'])
