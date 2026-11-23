@@ -32,6 +32,43 @@ def test_active_login_frame_wins_over_background_error():
     assert classify_action('extract',{},dict(view,manual_required=True))[0]=='read'
 
 
+def test_empty_phone_is_not_a_navigation_blocker_or_proof_of_sms():
+    view={'fields':[{'type':'tel','name':'Mobile Phone Number','empty':True,'required':True}]}
+    assert input_need(view,navigation_only=True) is None
+    prompt=input_need(view)['prompt']
+    assert 'phone' in prompt and 'verification' not in prompt and 'country code' not in prompt
+    view['fields'][0]['required']=False
+    assert input_need(view) is None
+    assert input_need({'manual_required':True,'fields':[{'type':'password'}]},navigation_only=True) is None
+    assert input_need({'human_required':True,'manual_required':True},navigation_only=True)['kind']=='manual'
+
+
+async def test_navigation_pause_repair_preserves_page_and_does_not_require_phone(database,users):
+    import time
+    from personal_agent.browser_recovery import repair_navigation_pauses,input_text
+    from personal_agent.browser_intent import navigation_only_run
+    from personal_agent.browser_host import BrowserHost
+    uid=users[0]['id'];sid=database.new_session(uid)
+    database.message(uid,sid,'user','can you take me to the application to fillout')
+    legacy='What phone number should I use on this website? Include the country code. I will ask for approval before requesting a verification message.'
+    action={'kind':'information','prompt':legacy,'url':'https://example.com/application','operation':'request_user'}
+    database.execute("INSERT INTO runs(id,user_id,session_id,status,approval_id,approval,created) VALUES('nav-phone',?,?,'input','pause',?,?)",(uid,sid,json.dumps({'type':'browser_input','action':action}),time.time()))
+    mid=database.message(uid,sid,'assistant',input_text(action));database.event('nav-phone','input',{'id':'pause','text':input_text(action),'message_id':mid})
+    database.message(uid,sid,'user','Continue')
+    assert navigation_only_run(database,uid,'nav-phone')
+    assert not navigation_only_run(database,users[1]['id'],'nav-phone')
+    assert repair_navigation_pauses(database)==1
+    pause=json.loads(database.one("SELECT approval FROM runs WHERE id='nav-phone'")['approval'])['action']
+    assert pause['purpose']=='page_opened' and pause['url']==action['url']
+    assert 'phone number' not in database.one('SELECT content FROM messages WHERE id=?',(mid,))['content']
+    host=BrowserHost(database);host.view_page=AsyncMock(return_value=object())
+    host.snapshot=AsyncMock(return_value={'fields':[{'type':'tel','required':True,'empty':True,'valid':False}]})
+    assert await host.manual_ready(uid,'nav-phone')
+    host.snapshot.return_value={'manual_required':True,'fields':[{'type':'password','required':True,'empty':True}]}
+    assert not await host.manual_ready(uid,'nav-phone')
+    assert repair_navigation_pauses(database)==0
+
+
 def test_recovery_budget_allows_alternatives_and_stops_loops():
     budget=RecoveryBudget(max_failures=4,max_same=2)
     state={'url':'https://example.com','text':'unchanged'}
@@ -244,3 +281,27 @@ async def test_fast_approval_waits_for_interrupt_checkpoint_finalization(databas
     await wait_service(service,run)
     assert graph.resumed and database.one('SELECT status FROM runs WHERE id=?',(run,))['status']=='completed'
     assert len(database.rows("SELECT id FROM events WHERE kind='approval'"))==1
+
+
+async def test_worker_discovers_oopifs_without_observing_other_tabs():
+    from personal_agent.browser_use_worker import frame_observations
+    root={'id':'main','url':'https://shop.example/'}
+    frames={
+        'main':root,
+        'login':{'id':'login','url':'https://identity.example/','parentFrameId':'main'},
+        'other':{'id':'other','url':'https://unrelated.example/'},
+        'private':{'id':'private','url':'https://identity.example/','parentFrameId':'other'},
+    }
+    parent_page=SimpleNamespace(getFrameTree=AsyncMock(return_value={'frameTree':{'frame':root}}),
+        createIsolatedWorld=AsyncMock(side_effect=RuntimeError('OOPIF needs its own target')))
+    parent_dom=SimpleNamespace(getFrameOwner=AsyncMock(return_value={'backendNodeId':2}),resolveNode=AsyncMock(return_value={'object':{'objectId':'owner'}}))
+    parent_runtime=SimpleNamespace(callFunctionOn=AsyncMock(return_value={'result':{'value':{'visible':True,'focused':True}}}),releaseObject=AsyncMock())
+    parent=SimpleNamespace(session_id='main-session',cdp_client=SimpleNamespace(send=SimpleNamespace(Page=parent_page,DOM=parent_dom,Runtime=parent_runtime)))
+    child_runtime=SimpleNamespace(evaluate=AsyncMock(return_value={'result':{'value':{'url':'https://identity.example/','text':'Sign in'}}}))
+    child_page=SimpleNamespace(createIsolatedWorld=AsyncMock(return_value={'executionContextId':3}))
+    child=SimpleNamespace(session_id='login-session',cdp_client=SimpleNamespace(send=SimpleNamespace(Page=child_page,Runtime=child_runtime)))
+    browser=SimpleNamespace(get_all_frames=AsyncMock(return_value=(frames,{})),get_or_create_cdp_session=AsyncMock(return_value=child))
+    result=await frame_observations(browser,parent)
+    assert result==[{'url':'https://identity.example/','text':'Sign in','focused':True}]
+    browser.get_or_create_cdp_session.assert_awaited_once_with(target_id='login',focus=False)
+    assert child_runtime.evaluate.await_count==1

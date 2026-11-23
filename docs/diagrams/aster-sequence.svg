@@ -1,0 +1,165 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="2640" height="2640" viewBox="-100 0 2640 2640" role="img" aria-labelledby="title desc">
+<title id="title">Aster — request execution sequence</title>
+<desc id="desc">Aster loads scoped context, resolves intent, invokes relevant tools or independent subagents, verifies and streams results, saves eligible memory, and optionally uses Temporal for durable availability workflows. Browser transactions require approval. Signed MCP callbacks reach subagents before Temporal signals.</desc>
+<defs>
+<marker id="blue" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0 L10 5 L0 10 Z" fill="#466ab2"/></marker>
+<marker id="navy" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0 L10 5 L0 10 Z" fill="#234c86"/></marker>
+<marker id="purple" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0 L10 5 L0 10 Z" fill="#8b6abd"/></marker>
+<marker id="teal" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0 L10 5 L0 10 Z" fill="#168e88"/></marker>
+<marker id="amber" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0 L10 5 L0 10 Z" fill="#cf8b31"/></marker>
+</defs>
+<rect x="-100" width="2640" height="2640" fill="#f6f8fc"/>
+<style>text{font-family:Arial,Helvetica,sans-serif} .small{font-size:18px} .label{font-size:20px;fill:#263953} .muted{fill:#63738d} .bold{font-weight:700}</style>
+<text x="65" y="80" font-size="48" fill="#19263e" text-anchor="start" font-weight="700">ASTER</text>
+<text x="65" y="127" font-size="30" fill="#63738d" text-anchor="start" font-weight="400">Request execution sequence</text>
+<text x="2375" y="79" font-size="18" fill="#63738d" text-anchor="end" font-weight="700">REFERENCE DESIGN</text>
+<text x="2375" y="122" font-size="21" fill="#466ab2" text-anchor="end" font-weight="400">Intent → scoped execution → verified outcome</text>
+<rect x="27" y="185" width="296" height="86" rx="17" fill="#edf3fd" stroke="#466ab2" stroke-width="1.6"/>
+<text x="175" y="219" font-size="23" fill="#466ab2" text-anchor="middle" font-weight="700">User &amp; app</text>
+<text x="175" y="248" font-size="16" fill="#63738d" text-anchor="middle" font-weight="400">Chat · approvals · alerts</text>
+<line x1="175" y1="272" x2="175" y2="2350" stroke="#466ab2" opacity="0.27" stroke-width="1.5" stroke-dasharray="6 7"/>
+<rect x="372" y="185" width="296" height="86" rx="17" fill="#e8f0ff" stroke="#234c86" stroke-width="1.6"/>
+<text x="520" y="219" font-size="23" fill="#234c86" text-anchor="middle" font-weight="700">Deep Agent Harness</text>
+<text x="520" y="248" font-size="16" fill="#63738d" text-anchor="middle" font-weight="400">Deep Agents + LangGraph</text>
+<line x1="520" y1="272" x2="520" y2="2350" stroke="#234c86" opacity="0.27" stroke-width="1.5" stroke-dasharray="6 7"/>
+<rect x="702" y="185" width="296" height="86" rx="17" fill="#f2eeff" stroke="#8b6abd" stroke-width="1.6"/>
+<text x="850" y="219" font-size="23" fill="#8b6abd" text-anchor="middle" font-weight="700">Memory &amp; context</text>
+<text x="850" y="248" font-size="16" fill="#63738d" text-anchor="middle" font-weight="400">Messages · state · preferences</text>
+<line x1="850" y1="272" x2="850" y2="2350" stroke="#8b6abd" opacity="0.27" stroke-width="1.5" stroke-dasharray="6 7"/>
+<rect x="1042" y="185" width="296" height="86" rx="17" fill="#ecf8f6" stroke="#168e88" stroke-width="1.6"/>
+<text x="1190" y="219" font-size="23" fill="#168e88" text-anchor="middle" font-weight="700">Tools &amp; browser</text>
+<text x="1190" y="248" font-size="16" fill="#63738d" text-anchor="middle" font-weight="400">Research · images · Browser Use</text>
+<line x1="1190" y1="272" x2="1190" y2="2350" stroke="#168e88" opacity="0.27" stroke-width="1.5" stroke-dasharray="6 7"/>
+<rect x="1382" y="185" width="296" height="86" rx="17" fill="#eef1fb" stroke="#466ab2" stroke-width="1.6"/>
+<text x="1530" y="219" font-size="23" fill="#466ab2" text-anchor="middle" font-weight="700">Subagents</text>
+<text x="1530" y="248" font-size="16" fill="#63738d" text-anchor="middle" font-weight="400">Independent Dining / Travel</text>
+<line x1="1530" y1="272" x2="1530" y2="2350" stroke="#466ab2" opacity="0.27" stroke-width="1.5" stroke-dasharray="6 7"/>
+<rect x="1722" y="185" width="296" height="86" rx="17" fill="#ecf8f6" stroke="#168e88" stroke-width="1.6"/>
+<text x="1870" y="219" font-size="23" fill="#168e88" text-anchor="middle" font-weight="700">Company MCP</text>
+<text x="1870" y="248" font-size="16" fill="#63738d" text-anchor="middle" font-weight="400">Dining · hotels · flights</text>
+<line x1="1870" y1="272" x2="1870" y2="2350" stroke="#168e88" opacity="0.27" stroke-width="1.5" stroke-dasharray="6 7"/>
+<rect x="2062" y="185" width="296" height="86" rx="17" fill="#fff5e7" stroke="#cf8b31" stroke-width="1.6"/>
+<text x="2210" y="219" font-size="23" fill="#cf8b31" text-anchor="middle" font-weight="700">Temporal</text>
+<text x="2210" y="248" font-size="16" fill="#63738d" text-anchor="middle" font-weight="400">Workflows · schedules</text>
+<line x1="2210" y1="272" x2="2210" y2="2350" stroke="#cf8b31" opacity="0.27" stroke-width="1.5" stroke-dasharray="6 7"/>
+<rect x="512" y="351" width="16" height="1430" rx="4" fill="#d9e5fc" stroke="#a6bce7" stroke-width="1.6"/>
+<rect x="44" y="295" width="2352" height="49" rx="9" fill="#eaf0f8" stroke="none" stroke-width="1.6"/>
+<text x="66" y="327" font-size="20" fill="#466ab2" text-anchor="start" font-weight="700">01</text>
+<text x="113" y="327" font-size="20" fill="#19263e" text-anchor="start" font-weight="700">UNDERSTAND &amp; PLAN</text>
+<text x="2374" y="327" font-size="18" fill="#63738d" text-anchor="end" font-weight="400">Every request</text>
+<line x1="175" y1="380" x2="520" y2="380" stroke="#466ab2" stroke-width="2.4" marker-end="url(#blue)"/>
+<rect x="229.45" y="346" width="236.1" height="27" rx="5" fill="#f6f8fc" stroke="none" stroke-width="1.6"/>
+<text x="347.5" y="366" font-size="20" fill="#19263e" text-anchor="middle" font-weight="500">Request + constraints</text>
+<rect x="373.0" y="405" width="294" height="42" rx="10" fill="#edf3fd" stroke="#234c86" stroke-width="1.6"/>
+<text x="520" y="432" font-size="19" fill="#234c86" text-anchor="middle" font-weight="700">Validate identity &amp; policy</text>
+<line x1="520" y1="495" x2="850" y2="495" stroke="#8b6abd" stroke-width="2.4" marker-end="url(#purple)"/>
+<rect x="577.05" y="461" width="215.9" height="27" rx="5" fill="#f6f8fc" stroke="none" stroke-width="1.6"/>
+<text x="685.0" y="481" font-size="20" fill="#19263e" text-anchor="middle" font-weight="500">Load scoped context</text>
+<line x1="850" y1="552" x2="520" y2="552" stroke="#8b6abd" stroke-width="2.4" marker-end="url(#purple)" stroke-dasharray="8 6"/>
+<rect x="572.0" y="518" width="226.0" height="27" rx="5" fill="#f6f8fc" stroke="none" stroke-width="1.6"/>
+<text x="685.0" y="538" font-size="20" fill="#19263e" text-anchor="middle" font-weight="500">Context + checkpoint</text>
+<rect x="367.0" y="578" width="306" height="42" rx="10" fill="#edf3fd" stroke="#234c86" stroke-width="1.6"/>
+<text x="520" y="605" font-size="19" fill="#234c86" text-anchor="middle" font-weight="700">Resolve intent · plan next step</text>
+<rect x="44" y="650" width="2352" height="49" rx="9" fill="#eaf0f8" stroke="none" stroke-width="1.6"/>
+<text x="66" y="682" font-size="20" fill="#466ab2" text-anchor="start" font-weight="700">02</text>
+<text x="113" y="682" font-size="20" fill="#19263e" text-anchor="start" font-weight="700">EXECUTE &amp; REFINE</text>
+<text x="2374" y="682" font-size="18" fill="#63738d" text-anchor="end" font-weight="400">Choose only the paths the task needs</text>
+<rect x="375" y="721" width="1930" height="224" rx="12" fill="none" stroke="#cbd7eb" stroke-width="1.6" stroke-dasharray="7 6"/>
+<rect x="390" y="708" width="470" height="28" rx="4" fill="#f6f8fc" stroke="none" stroke-width="1.6"/>
+<text x="405" y="729" font-size="17" fill="#466ab2" text-anchor="start" font-weight="700">DOMAIN TASK · when specialist work is needed</text>
+<line x1="520" y1="771" x2="1530" y2="771" stroke="#466ab2" stroke-width="2.4" marker-end="url(#blue)"/>
+<rect x="851.4" y="737" width="347.2" height="27" rx="5" fill="#f6f8fc" stroke="none" stroke-width="1.6"/>
+<text x="1025.0" y="757" font-size="20" fill="#19263e" text-anchor="middle" font-weight="500">Delegate task + isolated context</text>
+<line x1="1530" y1="825" x2="1870" y2="825" stroke="#168e88" stroke-width="2.4" marker-end="url(#teal)"/>
+<rect x="1581.95" y="791" width="236.1" height="27" rx="5" fill="#f6f8fc" stroke="none" stroke-width="1.6"/>
+<text x="1700.0" y="811" font-size="20" fill="#19263e" text-anchor="middle" font-weight="500">Search / availability</text>
+<line x1="1870" y1="878" x2="1530" y2="878" stroke="#168e88" stroke-width="2.4" marker-end="url(#teal)" stroke-dasharray="8 6"/>
+<rect x="1597.1" y="844" width="205.79999999999998" height="27" rx="5" fill="#f6f8fc" stroke="none" stroke-width="1.6"/>
+<text x="1700.0" y="864" font-size="20" fill="#19263e" text-anchor="middle" font-weight="500">Structured results</text>
+<line x1="1530" y1="931" x2="520" y2="931" stroke="#466ab2" stroke-width="2.4" marker-end="url(#blue)" stroke-dasharray="8 6"/>
+<rect x="886.75" y="897" width="276.5" height="27" rx="5" fill="#f6f8fc" stroke="none" stroke-width="1.6"/>
+<text x="1025.0" y="917" font-size="20" fill="#19263e" text-anchor="middle" font-weight="500">Evidence + scoped results</text>
+<rect x="375" y="986" width="1930" height="123" rx="12" fill="none" stroke="#b6dcd8" stroke-width="1.6" stroke-dasharray="7 6"/>
+<rect x="390" y="973" width="320" height="28" rx="4" fill="#f6f8fc" stroke="none" stroke-width="1.6"/>
+<text x="405" y="994" font-size="17" fill="#168e88" text-anchor="start" font-weight="700">APPLICATION TOOLS · as needed</text>
+<line x1="520" y1="1034" x2="1190" y2="1034" stroke="#168e88" stroke-width="2.4" marker-end="url(#teal)"/>
+<rect x="666.25" y="1000" width="377.5" height="27" rx="5" fill="#f6f8fc" stroke="none" stroke-width="1.6"/>
+<text x="855.0" y="1020" font-size="20" fill="#19263e" text-anchor="middle" font-weight="500">Research / files / image generation</text>
+<line x1="1190" y1="1093" x2="520" y2="1093" stroke="#168e88" stroke-width="2.4" marker-end="url(#teal)" stroke-dasharray="8 6"/>
+<rect x="701.6" y="1059" width="306.8" height="27" rx="5" fill="#f6f8fc" stroke="none" stroke-width="1.6"/>
+<text x="855.0" y="1079" font-size="20" fill="#19263e" text-anchor="middle" font-weight="500">Sources + verified artifacts</text>
+<rect x="375" y="1154" width="1930" height="355" rx="12" fill="none" stroke="#b6dcd8" stroke-width="1.6" stroke-dasharray="7 6"/>
+<rect x="390" y="1141" width="290" height="28" rx="4" fill="#f6f8fc" stroke="none" stroke-width="1.6"/>
+<text x="405" y="1162" font-size="17" fill="#168e88" text-anchor="start" font-weight="700">BROWSER ACTION · as needed</text>
+<line x1="520" y1="1198" x2="1190" y2="1198" stroke="#168e88" stroke-width="2.4" marker-end="url(#teal)"/>
+<rect x="721.8" y="1164" width="266.4" height="27" rx="5" fill="#f6f8fc" stroke="none" stroke-width="1.6"/>
+<text x="855.0" y="1184" font-size="20" fill="#19263e" text-anchor="middle" font-weight="500">Goal + confirmed details</text>
+<rect x="1037.0" y="1216" width="306" height="42" rx="10" fill="#edf8f6" stroke="#168e88" stroke-width="1.6"/>
+<text x="1190" y="1243" font-size="19" fill="#168e88" text-anchor="middle" font-weight="700">Observe → act → verify</text>
+<line x1="1190" y1="1293" x2="520" y2="1293" stroke="#168e88" stroke-width="2.4" marker-end="url(#teal)" stroke-dasharray="8 6"/>
+<rect x="651.1" y="1259" width="407.8" height="27" rx="5" fill="#f6f8fc" stroke="none" stroke-width="1.6"/>
+<text x="855.0" y="1279" font-size="20" fill="#19263e" text-anchor="middle" font-weight="500">Approval needed? Return action details</text>
+<line x1="520" y1="1349" x2="175" y2="1349" stroke="#466ab2" stroke-width="2.4" marker-end="url(#blue)"/>
+<rect x="194.1" y="1315" width="306.8" height="27" rx="5" fill="#f6f8fc" stroke="none" stroke-width="1.6"/>
+<text x="347.5" y="1335" font-size="20" fill="#19263e" text-anchor="middle" font-weight="500">Request approval if required</text>
+<line x1="175" y1="1400" x2="520" y2="1400" stroke="#466ab2" stroke-width="2.4" marker-end="url(#blue)" stroke-dasharray="8 6"/>
+<rect x="254.7" y="1366" width="185.6" height="27" rx="5" fill="#f6f8fc" stroke="none" stroke-width="1.6"/>
+<text x="347.5" y="1386" font-size="20" fill="#19263e" text-anchor="middle" font-weight="500">Approve / reject</text>
+<line x1="520" y1="1452" x2="1190" y2="1452" stroke="#168e88" stroke-width="2.4" marker-end="url(#teal)"/>
+<rect x="696.55" y="1418" width="316.9" height="27" rx="5" fill="#f6f8fc" stroke="none" stroke-width="1.6"/>
+<text x="855.0" y="1438" font-size="20" fill="#19263e" text-anchor="middle" font-weight="500">Act only within authorization</text>
+<line x1="1190" y1="1502" x2="520" y2="1502" stroke="#168e88" stroke-width="2.4" marker-end="url(#teal)" stroke-dasharray="8 6"/>
+<rect x="711.7" y="1468" width="286.59999999999997" height="27" rx="5" fill="#f6f8fc" stroke="none" stroke-width="1.6"/>
+<text x="855.0" y="1488" font-size="20" fill="#19263e" text-anchor="middle" font-weight="500">Verified outcome / blocker</text>
+<text x="1745" y="1220" font-size="19" fill="#168e88" text-anchor="start" font-weight="700">Approval boundary</text>
+<text x="1745" y="1250" font-size="18" fill="#63738d" text-anchor="start" font-weight="400">Purchases · bookings · submissions</text>
+<text x="1745" y="1280" font-size="18" fill="#63738d" text-anchor="start" font-weight="400">Manual takeover for private login steps</text>
+<rect x="44" y="1565" width="2352" height="49" rx="9" fill="#eaf0f8" stroke="none" stroke-width="1.6"/>
+<text x="66" y="1597" font-size="20" fill="#466ab2" text-anchor="start" font-weight="700">03</text>
+<text x="113" y="1597" font-size="20" fill="#19263e" text-anchor="start" font-weight="700">VERIFY, RESPOND &amp; REMEMBER</text>
+<text x="2374" y="1597" font-size="18" fill="#63738d" text-anchor="end" font-weight="400">Useful results can stream before the task finishes</text>
+<rect x="357.0" y="1630" width="326" height="42" rx="10" fill="#edf3fd" stroke="#234c86" stroke-width="1.6"/>
+<text x="520" y="1657" font-size="19" fill="#234c86" text-anchor="middle" font-weight="700">Reconcile evidence · refine if needed</text>
+<line x1="520" y1="1720" x2="175" y2="1720" stroke="#466ab2" stroke-width="2.4" marker-end="url(#blue)" stroke-dasharray="8 6"/>
+<rect x="214.3" y="1686" width="266.4" height="27" rx="5" fill="#f6f8fc" stroke="none" stroke-width="1.6"/>
+<text x="347.5" y="1706" font-size="20" fill="#19263e" text-anchor="middle" font-weight="500">Stream verified sections</text>
+<rect x="33.0" y="1743" width="284" height="42" rx="10" fill="#edf3fd" stroke="#466ab2" stroke-width="1.6"/>
+<text x="175" y="1770" font-size="19" fill="#466ab2" text-anchor="middle" font-weight="700">e.g. flights → hotels → days</text>
+<line x1="520" y1="1830" x2="850" y2="1830" stroke="#8b6abd" stroke-width="2.4" marker-end="url(#purple)"/>
+<rect x="531.6" y="1796" width="306.8" height="27" rx="5" fill="#f6f8fc" stroke="none" stroke-width="1.6"/>
+<text x="685.0" y="1816" font-size="20" fill="#19263e" text-anchor="middle" font-weight="500">Save state + eligible memory</text>
+<text x="966" y="1809" font-size="18" fill="#8b6abd" text-anchor="start" font-weight="400">Provisional choices stay in the chat draft</text>
+<rect x="44" y="1895" width="2352" height="49" rx="9" fill="#eaf0f8" stroke="none" stroke-width="1.6"/>
+<text x="66" y="1927" font-size="20" fill="#466ab2" text-anchor="start" font-weight="700">04</text>
+<text x="113" y="1927" font-size="20" fill="#19263e" text-anchor="start" font-weight="700">DURABLE CONTINUATION</text>
+<text x="2374" y="1927" font-size="18" fill="#63738d" text-anchor="end" font-weight="400">Optional · authorized watches / requested recurring monitors</text>
+<line x1="520" y1="1980" x2="2210" y2="1980" stroke="#cf8b31" stroke-width="2.4" marker-end="url(#amber)"/>
+<rect x="1226.75" y="1946" width="276.5" height="27" rx="5" fill="#f6f8fc" stroke="none" stroke-width="1.6"/>
+<text x="1365.0" y="1966" font-size="20" fill="#19263e" text-anchor="middle" font-weight="500">Start workflow / schedule</text>
+<line x1="2210" y1="2040" x2="1530" y2="2040" stroke="#cf8b31" stroke-width="2.4" marker-end="url(#amber)"/>
+<rect x="1716.6" y="2006" width="306.8" height="27" rx="5" fill="#f6f8fc" stroke="none" stroke-width="1.6"/>
+<text x="1870.0" y="2026" font-size="20" fill="#19263e" text-anchor="middle" font-weight="500">Run or retry scoped activity</text>
+<line x1="1530" y1="2100" x2="1870" y2="2100" stroke="#168e88" stroke-width="2.4" marker-end="url(#teal)"/>
+<rect x="1612.25" y="2066" width="175.5" height="27" rx="5" fill="#f6f8fc" stroke="none" stroke-width="1.6"/>
+<text x="1700.0" y="2086" font-size="20" fill="#19263e" text-anchor="middle" font-weight="500">Watch / recheck</text>
+<line x1="1870" y1="2160" x2="1530" y2="2160" stroke="#cf8b31" stroke-width="2.4" marker-end="url(#amber)" stroke-dasharray="8 6"/>
+<rect x="1576.9" y="2126" width="246.2" height="27" rx="5" fill="#f6f8fc" stroke="none" stroke-width="1.6"/>
+<text x="1700.0" y="2146" font-size="20" fill="#19263e" text-anchor="middle" font-weight="500">Signed change callback</text>
+<line x1="1530" y1="2220" x2="2210" y2="2220" stroke="#cf8b31" stroke-width="2.4" marker-end="url(#amber)" stroke-dasharray="8 6"/>
+<rect x="1701.45" y="2186" width="337.09999999999997" height="27" rx="5" fill="#f6f8fc" stroke="none" stroke-width="1.6"/>
+<text x="1870.0" y="2206" font-size="20" fill="#19263e" text-anchor="middle" font-weight="500">Persist inbox → signal workflow</text>
+<line x1="2210" y1="2280" x2="520" y2="2280" stroke="#cf8b31" stroke-width="2.4" marker-end="url(#amber)" stroke-dasharray="8 6"/>
+<rect x="1196.45" y="2246" width="337.09999999999997" height="27" rx="5" fill="#f6f8fc" stroke="none" stroke-width="1.6"/>
+<text x="1365.0" y="2266" font-size="20" fill="#19263e" text-anchor="middle" font-weight="500">Resume / deliver durable result</text>
+<line x1="520" y1="2340" x2="175" y2="2340" stroke="#466ab2" stroke-width="2.4" marker-end="url(#blue)" stroke-dasharray="8 6"/>
+<rect x="214.3" y="2306" width="266.4" height="27" rx="5" fill="#f6f8fc" stroke="none" stroke-width="1.6"/>
+<text x="347.5" y="2326" font-size="20" fill="#19263e" text-anchor="middle" font-weight="500">Notify actionable change</text>
+<rect x="48" y="2390" width="2344" height="65" rx="14" fill="#eaf0f8" stroke="#d9e2ef" stroke-width="1.6"/>
+<text x="1220" y="2431" font-size="22" fill="#63738d" text-anchor="middle" font-weight="400">Account isolation • Policy &amp; approvals • Checkpoints • Audit &amp; traces • Cancellation</text>
+<text x="65" y="2500" font-size="17" fill="#63738d" text-anchor="start" font-weight="700">MODEL ROLES</text>
+<text x="65" y="2531" font-size="18" fill="#19263e" text-anchor="start" font-weight="400">GPT-5.4 mini: main, subagents, search &amp; memory</text>
+<text x="886" y="2531" font-size="18" fill="#19263e" text-anchor="start" font-weight="400">GPT-6.1 Terra: browser &amp; verification</text>
+<text x="1640" y="2531" font-size="18" fill="#19263e" text-anchor="start" font-weight="400">GPT-Image-2.6 Sunburst: image creation</text>
+<text x="65" y="2580" font-size="17" fill="#63738d" text-anchor="start" font-weight="400">Context supports intent resolution; execution is a loop, not a fixed checklist. Episodic recall remains a proposed extension.</text>
+<text x="65" y="2609" font-size="17" fill="#63738d" text-anchor="start" font-weight="400">Temporal does not automatically replay browser actions. Solid: calls / decisions. Dashed: returns / events. Optional paths are outlined.</text>
+</svg>

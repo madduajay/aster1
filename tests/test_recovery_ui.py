@@ -11,7 +11,7 @@ from personal_agent.agent import Engine
 from personal_agent.app import create_app
 from personal_agent.browser_tasks import BrowserTasks,Worker
 from personal_agent.browser_policy import action_binding
-from personal_agent.browser_host import BrowserHost
+from personal_agent.browser_host import BrowserHost,page_viewport
 from personal_agent.browser_dom import inspect_dom
 from personal_agent.memory import Memory
 from personal_agent.service import Service
@@ -21,12 +21,14 @@ from validation.recovery_controls import VENUE,LOGIN
 
 NATIVE_VENUE=VENUE.replace('width:650px;height:500px','width:calc(100% - 4px);max-width:650px;height:500px')
 NATIVE_LOGIN=LOGIN.replace('<body>','''<style>body{font:16px system-ui;margin:16px}input,button{font:inherit;padding:10px;box-sizing:border-box}input{display:block;width:100%;max-width:320px}button{margin-top:12px}body:after{content:"Website footer";display:block;margin-top:850px}</style><body>''')
+NATIVE_LOGIN=NATIVE_LOGIN.replace('type=tel','type=tel required')
 NATIVE_LOGIN=NATIVE_LOGIN.replace('</body>','''<button type=button id=hold-control onpointerdown="this.dataset.started=performance.now();this.dataset.held='yes'" onpointerup="this.dataset.elapsed=performance.now()-Number(this.dataset.started);this.dataset.held='no'" onclick="this.dataset.clicks=Number(this.dataset.clicks||0)+1">Hold control</button></body>''')
 
 
 @pytest.mark.skipif(os.environ.get('RUN_BROWSER_TESTS')!='1',reason='Real Chromium requires explicit enablement')
+@pytest.mark.parametrize('browser_mode',['headless','visible'])
 @pytest.mark.parametrize('entry',['chat','panel','locked-main'])
-async def test_phone_private_takeover_approval_and_resume_https(database,users,credentials,tmp_path,monkeypatch,entry):
+async def test_phone_private_takeover_approval_and_resume_https(database,users,credentials,tmp_path,monkeypatch,entry,browser_mode):
     monkeypatch.setenv('PLAYWRIGHT_BROWSERS_PATH',str(config.ROOT/'.runtime/playwright'))
     monkeypatch.setattr(host_module,'public_url',AsyncMock());monkeypatch.setattr(task_module,'public_url',AsyncMock())
     sock=socket.socket();sock.bind(('127.0.0.1',0));sock.listen();monkeypatch.setattr(config,'ORIGIN',f'https://aster.localhost:{sock.getsockname()[1]}')
@@ -42,7 +44,7 @@ async def test_phone_private_takeover_approval_and_resume_https(database,users,c
                     await r.fulfill(content_type='text/html',body=body)
                 await context.route('https://**.fixture.test/**',fixture)
             return context
-    host=Host(database)
+    host=Host(database,headless=browser_mode=='headless')
     class Simulation(BrowserTasks):
         queue=asyncio.Queue()
         submissions=0
@@ -62,8 +64,9 @@ async def test_phone_private_takeover_approval_and_resume_https(database,users,c
                 if node:state['node']=node
                 await self.before(tid,{'seq':seq,'operation':op,'params':params,'observed':state,'fingerprint':action_binding(op,params,state)})
                 return await self.queue.get()
+            original=await page_viewport(page)
             phone=await boundary(1,'request_user',{'kind':'information','prompt':'Which phone number should I use?'})
-            assert page.viewport_size=={'width':1280,'height':850},'Agent resumed before the live viewport was restored'
+            assert await page_viewport(page)==original,'Browser viewport changed during handoff'
             if phone['response'].startswith('The user completed the information fields directly'):
                 actual=await fields(page).locator('#phone').input_value()
                 assert actual=='+1 202 555 0100',actual
@@ -97,21 +100,42 @@ async def test_phone_private_takeover_approval_and_resume_https(database,users,c
             async with async_playwright() as pw:
                 chromium=await pw.chromium.launch(headless=True,chromium_sandbox=True)
                 page=await chromium.new_page(ignore_https_errors=False,viewport={'width':1400,'height':1000})
+                await page.add_init_script("Object.defineProperty(navigator,'platform',{get:()=> 'Linux x86_64'})")
                 errors=[];page.on('pageerror',lambda e:errors.append(str(e)))
                 await page.goto(config.ORIGIN);await page.locator('#username').fill('user01');await page.locator('#password').fill(credentials['user01']);await page.locator('#password').press('Enter');await page.locator('#password-form').wait_for(state='visible');await page.locator('#new-password').fill('recovery-ui-password-2026');await page.locator('#new-password').press('Enter');await page.locator('#composer').wait_for(state='visible')
                 await page.locator('#input').fill('Complete my reservation');await page.locator('#input').press('Enter')
                 await until(lambda:service.active(user) and service.active(user)['status']=='input');await expect(page.locator('#status')).to_contain_text('Waiting for your reply')
                 info=dict(service.active(user));await page.reload();await expect(page.locator('#status')).to_contain_text('Waiting for your reply')
+                await expect(page.get_by_role('button',name='Release control',exact=True)).to_have_count(0)
+                await page.get_by_role('button',name='Take control',exact=True).click()
+                await expect(page.get_by_role('button',name='Take control',exact=True)).to_have_count(0)
+                await expect(page.get_by_role('button',name='Release control',exact=True)).to_be_visible()
                 await expect(page.locator('body')).to_have_class(__import__('re').compile(r'.*takeover.*'))
                 assert await page.locator('#browser-view').evaluate('e=>e.open')
                 await expect(page.locator('#browser-frame')).to_have_attribute('src',__import__('re').compile(r'^blob:'))
                 assert (await page.locator('#browser-view').bounding_box())['width']>600
                 website=host.contexts[user].pages[0]
                 image=page.locator('#browser-frame')
+                release=page.locator('#browser-view').get_by_role('button',name='Release control',exact=True)
+                await expect(page.locator('#messages').get_by_role('button',name='Release control',exact=True)).to_have_count(0)
+                assert (await release.bounding_box())['y']<(await image.bounding_box())['y']
+                assert await release.evaluate('e=>getComputedStyle(e).backgroundColor')==await page.get_by_role('button',name='Return to chat',exact=True).evaluate('e=>getComputedStyle(e).backgroundColor')
                 async def native_size():
-                    await page.wait_for_function("""()=>{const i=document.querySelector('#browser-frame'),r=i.parentElement.getBoundingClientRect();return i.src.startsWith('blob:')&&i.naturalWidth===Math.floor(r.width)&&i.naturalHeight===Math.floor(r.height)}""")
-                    dimensions=await image.evaluate('e=>({width:Math.floor(e.parentElement.getBoundingClientRect().width),height:Math.floor(e.parentElement.getBoundingClientRect().height)})')
-                    assert website.viewport_size==dimensions
+                    # A resize has three acknowledgements: server viewport,
+                    # control metadata, and the newly decoded image. Inspect a
+                    # coherent snapshot instead of racing the ResizeObserver.
+                    deadline=time.monotonic()+5
+                    while True:
+                        geometry=await image.evaluate("e=>({natural:[e.naturalWidth,e.naturalHeight],surface:[Math.floor(e.parentElement.getBoundingClientRect().width),Math.floor(e.parentElement.getBoundingClientRect().height)],control:[pendingInput?.control?.width,pendingInput?.control?.height],ready:pendingInput?.takeover&&pendingInput.control.connected&&e.src.startsWith('blob:')})")
+                        dimensions=dict(zip(('width','height'),geometry['surface']))
+                        if browser_mode=='visible':
+                            dimensions=await page_viewport(website)
+                            natural=geometry['natural']
+                            matches=geometry['control']==list(dimensions.values()) and natural[1]>0 and abs(natural[0]/natural[1]-dimensions['width']/dimensions['height'])<.015
+                        else:matches=geometry['natural']==geometry['surface']==geometry['control'] and website.viewport_size==dimensions
+                        if geometry['ready'] and matches:break
+                        if time.monotonic()>deadline:raise AssertionError(f'Browser frame geometry did not settle: {geometry}')
+                        await asyncio.sleep(.03)
                     if (await page.evaluate('innerWidth'))>=1050:
                         panel=await page.locator('#browser-view').bounding_box()
                         assert panel['y']>=88 and panel['y']+panel['height']<=(await page.evaluate('innerHeight')),'Interactive panel was clipped by the header or viewport'
@@ -120,19 +144,42 @@ async def test_phone_private_takeover_approval_and_resume_https(database,users,c
                 await native_size()
                 if entry!='chat':
                     with pytest.raises(Exception,match='eval is disabled'):await website.evaluate('()=>document.title')
-                async def click_website(locator):
+                async def website_point(locator):
                     size=await native_size();box=await locator.bounding_box();r=await image.bounding_box()
-                    await image.click(position={'x':(box['x']+box['width']/2)*r['width']/size['width'],'y':(box['y']+box['height']/2)*r['height']/size['height']})
+                    scale=min(r['width']/size['width'],r['height']/size['height'])
+                    return {'x':(r['width']-size['width']*scale)/2+(box['x']+box['width']/2)*scale,
+                            'y':(r['height']-size['height']*scale)/2+(box['y']+box['height']/2)*scale}
+                async def click_website(locator):
+                    if not await image.is_visible():await page.get_by_role('button',name='Open browser',exact=True).click()
+                    if not await page.evaluate('()=>!!pendingInput?.takeover'):await page.get_by_role('button',name='Take control',exact=True).click()
+                    await image.click(position=await website_point(locator))
+                async def resume_agent():
+                    if await page.get_by_role('button',name='Return to chat',exact=True).is_visible():
+                        paused=dict(service.active(user))
+                        await page.get_by_role('button',name='Return to chat',exact=True).click()
+                        await expect(page.locator('#browser-view')).to_be_hidden()
+                        assert service.active(user)['status']=='input' and service.active(user)['approval_id']==paused['approval_id']
+                        await page.reload();await expect(page.locator('#browser-view')).to_be_hidden()
+                    await expect(page.get_by_role('button',name='Open browser',exact=True)).to_be_visible()
+                    await page.wait_for_function('()=>!!pendingInput?.returned')
+                    await expect(page.get_by_role('button',name='Resume agent',exact=True)).to_have_count(0)
+                    await expect(page.get_by_role('button',name='Release control',exact=True)).to_have_count(0)
+                    await page.get_by_role('button',name='Open browser',exact=True).click()
+                    await expect(page.get_by_role('button',name='Release control',exact=True)).to_have_count(0)
+                    await page.get_by_role('button',name='Take control',exact=True).click()
+                    await page.get_by_role('button',name='Release control',exact=True).click()
                 if entry=='chat':
                     await page.locator('#input').fill('+1 202 555 0100');await page.locator('#input').press('Enter')
                 else:
                     await page.screenshot(path=str(config.ROOT/'.runtime/website-panel-input-ui.png'))
                     await image.focus();await page.keyboard.type('x')
                     await expect(page.locator('#error')).to_contain_text('Click the website textbox')
-                    await page.get_by_role('button',name='Continue',exact=True).click()
+                    await resume_agent()
                     await expect(page.locator('#error')).to_contain_text('Complete the required website fields')
-                    hold=fields(website).locator('#hold-control');box=await hold.bounding_box();size=await native_size();r=await image.bounding_box()
-                    await page.mouse.move(r['x']+(box['x']+box['width']/2)*r['width']/size['width'],r['y']+(box['y']+box['height']/2)*r['height']/size['height'])
+                    if not await image.is_visible():await page.get_by_role('button',name='Open browser',exact=True).click()
+                    if not await page.evaluate('()=>!!pendingInput?.takeover'):await page.get_by_role('button',name='Take control',exact=True).click()
+                    hold=fields(website).locator('#hold-control');point=await website_point(hold);r=await image.bounding_box()
+                    await page.mouse.move(r['x']+point['x'],r['y']+point['y'])
                     await page.mouse.down()
                     async def hold_state():return (await inspect_dom(website,['booking.fixture.test','identity.fixture.test'],"(()=>{const e=document.querySelector('#hold-control');return e?{held:e.getAttribute('data-held'),elapsed:e.getAttribute('data-elapsed'),clicks:e.getAttribute('data-clicks')}:{};})()"))[-1]['value']
                     for _ in range(50):
@@ -156,31 +203,32 @@ async def test_phone_private_takeover_approval_and_resume_https(database,users,c
                         await page.set_viewport_size(size);await native_size()
                         await expect(phone).to_have_value('+1 202 555 0100')
                         font=float((await inspect_dom(website,['booking.fixture.test','identity.fixture.test'],'parseFloat(getComputedStyle(document.body).fontSize)'))[-1]['value'])
-                        rendered=font*(await image.bounding_box())['width']/website.viewport_size['width']
-                        assert abs(rendered-16)<.1,'Website text was minified'
-                    await image.dispatch_event('wheel',{'deltaY':350,'bubbles':True,'cancelable':True})
+                        rendered=font*(await image.bounding_box())['width']/(await page_viewport(website))['width']
+                        if browser_mode=='headless':assert abs(rendered-16)<.1,'Website text was minified'
+                        else:assert website.viewport_size is None
+                    await image.hover(position=await website_point(phone));await page.mouse.wheel(0,350)
                     async def scroll_position():return (await inspect_dom(website,['booking.fixture.test','identity.fixture.test'],'scrollY'))[-1]['value']
                     for _ in range(50):
                         if await scroll_position()>0:break
                         await asyncio.sleep(.02)
                     assert await scroll_position()>0
-                    await image.dispatch_event('wheel',{'deltaY':-800,'bubbles':True,'cancelable':True})
+                    await page.mouse.wheel(0,-800)
                     for _ in range(50):
                         if await scroll_position()==0:break
                         await asyncio.sleep(.02)
                     assert await scroll_position()==0
                     await page.screenshot(path=str(config.ROOT/'.runtime/browser-panel-native-size.png'))
-                    await page.get_by_role('button',name='Continue',exact=True).click()
+                    await resume_agent()
                 await expect(page.get_by_role('button',name='Approve',exact=True)).to_be_visible()
                 assert 'takeover' not in (await page.locator('body').get_attribute('class') or '')
                 assert (await page.locator('#browser-view').bounding_box())['width']<=350
                 await until(lambda:not host.controls)
                 await page.get_by_role('button',name='Approve',exact=True).click()
-                await until(lambda:service.active(user) and service.active(user)['status']=='input');await expect(page.locator('body')).to_have_class(__import__('re').compile(r'.*takeover.*'))
+                await until(lambda:service.active(user) and service.active(user)['status']=='input');await page.get_by_role('button',name='Take control',exact=True).click();await expect(page.locator('body')).to_have_class(__import__('re').compile(r'.*takeover.*'))
                 manual=dict(service.active(user));assert manual['approval_id']!=info['approval_id']
-                await page.reload();await expect(page.locator('body')).to_have_class(__import__('re').compile(r'.*takeover.*'))
-                await expect(page.locator('#messages')).to_contain_text('Continue hands control back to the agent; Cancel stops this task.')
-                await page.get_by_role('button',name='Continue',exact=True).click();await expect(page.locator('#error')).to_contain_text('any private login/verification step')
+                await page.reload();await page.get_by_role('button',name='Take control',exact=True).click();await expect(page.locator('body')).to_have_class(__import__('re').compile(r'.*takeover.*'))
+                await expect(page.locator('#messages')).to_contain_text('Return to chat closes this panel; Cancel task stops the task.')
+                await resume_agent();await expect(page.locator('#error')).to_contain_text('any private login/verification step')
                 await page.locator('#input').fill('654321');await page.locator('#input').press('Enter');await expect(page.locator('#error')).to_contain_text('in the browser')
                 await click_website(fields(website).locator('#otp'))
                 if entry!='chat':await page.keyboard.type('654321')
@@ -189,7 +237,7 @@ async def test_phone_private_takeover_approval_and_resume_https(database,users,c
                 await expect(fields(website).locator('#otp')).to_have_value('654321')
                 await click_website(fields(website).locator('#verify'))
                 await expect(fields(website).get_by_role('heading',name='Signed in successfully')).to_be_visible()
-                await page.get_by_role('button',name='Continue',exact=True).click();await expect(page.get_by_role('button',name='Approve',exact=True)).to_be_visible()
+                await resume_agent();await expect(page.get_by_role('button',name='Approve',exact=True)).to_be_visible()
                 assert manager.submissions==0
                 await page.get_by_role('button',name='Approve',exact=True).click();await until(lambda:not service.active(user));await expect(page.locator('#messages')).to_contain_text('Reservation confirmed')
                 assert manager.submissions==1 and not errors

@@ -278,3 +278,53 @@ async def test_combined_monitor_silently_drops_expired_categories(database,users
         assert not database.rows('SELECT * FROM notifications')
         assert gateway.monitors(uid)[0]['queries'][0]['state']=='expired'
     finally:await service.close();await service.engine.client.close()
+
+
+@pytest.mark.parametrize('domain,c,delay',[('dining',D,10),('hotels',H,20)])
+async def test_opening_uses_normal_table_photo_and_description_without_duplicate_updates(database,users,monkeypatch,domain,c,delay):
+    from availability.media import enrich
+    from availability.presentation import grouped_options
+    from test_attachments import PNG
+    name=c.get('venue') or c['hotel'];calls=[]
+    async def fetch(url,maximum):
+        calls.append(url)
+        if url=='https://venue.example/details':
+            return (('<meta property="og:title" content="'+name+'"><meta property="og:description" content="A welcoming venue in New York."><meta property="og:image" content="https://images.example/venue.png">').encode(),url)
+        return PNG,url
+    monkeypatch.setattr('availability.media.fetch',fetch)
+    service=service_for(database,[AIMessage(content='Hi')]);gateway=service.availability
+    uid=users[0]['id'];sid=database.new_session(uid);mid=database.message(uid,sid,'user','Check '+name)
+    task=Task(request_id='opening-format-'+domain,user_id=uid,session_id=sid,source_message_id=mid,
+              scope_id='scope-format-'+domain,queries=[{'domain':domain,'criteria':c}])
+    qid='opening-format-'+domain;clock=[100.]
+    stock=Stock(database.path.parent/('company-'+domain+'.sqlite'),domain,gateway.security,lambda:clock[0])
+    initial=stock.search(qid,c);initial['sources']=[{'url':'https://venue.example/details','title':name}]
+    assert not initial['available'] and not initial['options']
+    try:
+        await enrich(gateway.store,[initial])  # Prepare the photo before the opening timer starts.
+        assert len(calls)==2 and not initial['options']
+        gateway.store.save_query(qid,task,domain,initial['criteria'],initial)
+        gateway.store.execute('INSERT INTO tasks VALUES(?,?,?,?,?,?,?)',(task.request_id,uid,sid,'dining' if domain=='dining' else 'travel',task.model_dump_json(),json.dumps({'results':[initial]}),time.time()))
+        gateway.store.execute('INSERT INTO subscriptions VALUES(?,?,?,?,?,?,?,?)',(qid,uid,task.request_id,domain,'av-main-format',time.time()+1000,'active',time.time()))
+        stock.watch(qid,c);clock[0]+=delay
+        received=[]
+        def receive(request):received.append(json.loads(request.content));return httpx.Response(200)
+        await stock.deliver(httpx.MockTransport(receive));event=received[0]
+        # Subagent forwarding writes the raw Company event over the query snapshot.
+        gateway.store.execute('UPDATE queries SET result=? WHERE id=?',(json.dumps(event),qid))
+        await gateway.publish({'query_id':qid,'event':event})
+        await gateway.publish({'query_id':qid,'event':event})
+        payload=json.loads(database.one('SELECT payload FROM availability_events')['payload'])
+        message=database.one("SELECT content FROM messages WHERE role='assistant'")['content']
+        assert grouped_options([payload]) in message
+        assert ('| Venue | Dates | Available times |' if domain=='dining' else '| Hotel | Stay | Room |') in message
+        assert '![Venue photo](/api/venue-photos/' in message and 'A welcoming venue in New York.' in message
+        assert '['+name+'](https://venue.example/details)' in message
+        assert len(calls)==2  # Event delivery reused the prepared image.
+        assert len(database.rows('SELECT * FROM notifications'))==1
+        assert len(database.rows('SELECT * FROM availability_chat_messages'))==1
+        assert 'photo_url' not in event['options'][0]  # Presentation never alters Company inventory.
+        database.execute('UPDATE notifications SET read_at=?',(time.time(),))
+        await gateway.publish({'query_id':qid,'event':event})
+        assert not service.background.snapshot(uid)['notifications']
+    finally:await service.close();await service.engine.client.close()

@@ -12,6 +12,7 @@ from playwright.async_api import Error as BrowserError
 from pydantic import BaseModel, Field, FiniteFloat, ValidationError
 from starlette.websockets import WebSocketDisconnect
 from .browser_dom import InspectionUnavailable
+from .browser_host import page_viewport
 
 
 class ViewportSize(BaseModel):
@@ -24,10 +25,12 @@ class ControlCommand(BaseModel):
     operation: str = Field(pattern='^(click|pointerdown|pointerup|type|key|scroll|resize)$')
     x: FiniteFloat | None = None
     y: FiniteFloat | None = None
+    pointer_x: FiniteFloat | None = Field(default=None,ge=0,le=16384)
+    pointer_y: FiniteFloat | None = Field(default=None,ge=0,le=16384)
     text: str | None = Field(default=None,max_length=2000)
     key: str | None = Field(default=None,max_length=32)
-    width: int | None = Field(default=None,ge=240,le=2400)
-    height: int | None = Field(default=None,ge=240,le=1600)
+    width: int | None = Field(default=None,ge=1,le=16384)
+    height: int | None = Field(default=None,ge=1,le=16384)
 
 
 class BrowserControl:
@@ -42,6 +45,7 @@ class BrowserControl:
         self.original_viewport=None
         self.restore_failed=False
         self.pointer_down=False
+        self.fit_only=False
 
     async def cancel_pointer(self):
         if self.pointer_down and self.page and not self.page.is_closed():
@@ -52,6 +56,10 @@ class BrowserControl:
             await self.page.mouse.up()
 
     async def resize(self,width,height):
+        if self.fit_only:
+            self.check()
+            self.viewport=await page_viewport(self.page,self.client)
+            return
         size=ViewportSize(width=width,height=height).model_dump()
         async with self.host.preview_locks.setdefault(self.user,asyncio.Lock()):
             self.check()
@@ -59,6 +67,18 @@ class BrowserControl:
             await self.page.set_viewport_size(size)
             self.viewport=size
             self.host.views[(self.user,self.run)]['captured']=0
+            if self.client:
+                # Chromium can keep emitting the old screencast dimensions
+                # after a viewport resize. Restart capture so displayed frames
+                # and input coordinates agree even on a visually static page.
+                await self.client.send('Page.stopScreencast')
+                while not self.frames.empty():self.frames.get_nowait()
+                await self.start_frames()
+
+    async def start_frames(self):
+        # Native Retina frames may have different pixel dimensions from CSS.
+        # Bound capture size; the client maps scaled frames to CSS coordinates.
+        await self.client.send('Page.startScreencast',{'format':'jpeg','quality':85,'maxWidth':self.viewport['width'],'maxHeight':self.viewport['height'],'everyNthFrame':1})
 
     def check(self):
         if self.stop.is_set() or not self.authorize():raise LookupError('Browser control revoked')
@@ -85,6 +105,13 @@ class BrowserControl:
             # Detect tab/profile loss, resume, cancellation and logout even
             # while the website is idle and produces no screencast frames.
             if await self.host.view_page(self.user,self.run)!=self.page:raise LookupError('Browser tab changed')
+            if self.fit_only:
+                actual=await page_viewport(self.page,self.client)
+                # Native Chrome can vary by one CSS pixel while scrolling.
+                # Keep frame geometry stable for that rounding noise.
+                if any(abs(actual[key]-self.viewport[key])>1 for key in ('width','height')):
+                    self.viewport=actual
+                    await self.send({'type':'viewport',**actual})
             try:frame=await asyncio.wait_for(self.frames.get(),.25)
             except TimeoutError:continue
             delay=.12-(time.monotonic()-self.last_frame)
@@ -118,15 +145,21 @@ class BrowserControl:
                 else:
                     # A click on an old frame must not land on a different field
                     # after a responsive layout change. Never replay that click.
-                    if command.operation in {'click','pointerdown','pointerup'} and {'width':command.width,'height':command.height}!=self.page.viewport_size:
-                        await self.cancel_pointer()
-                        raise ValueError('Stale browser viewport')
+                    positioned_scroll=command.operation=='scroll' and command.pointer_x is not None and command.pointer_y is not None
+                    if command.operation in {'click','pointerdown','pointerup'} or positioned_scroll:
+                        actual=await page_viewport(self.page,self.client)
+                        expected={'width':command.width,'height':command.height}
+                        tolerance=1 if self.fit_only else 0
+                        if not all(isinstance(expected[key],int) and abs(expected[key]-actual[key])<=tolerance for key in ('width','height')):
+                            await self.cancel_pointer()
+                            raise ValueError('Stale browser viewport')
                     if command.operation=='pointerdown':
                         if self.pointer_down:raise ValueError('A mouse button is already held')
                         self.pointer_down=True
                     if command.operation=='pointerup' and not self.pointer_down:raise ValueError('No mouse button is held')
+                    position={'pointer_x':command.pointer_x,'pointer_y':command.pointer_y} if positioned_scroll else {}
                     await self.host.manual_action(self.user,self.run,self.input_id,command.operation,
-                        command.x,command.y,command.text,command.key)
+                        command.x,command.y,command.text,command.key,**position)
                     if command.operation=='pointerup':self.pointer_down=False
                 focus={} if command.operation=='resize' else await self.host.input_focus(self.user,self.run,self.input_id)
                 await self.send({'type':'ack','id':command.id,**focus,**self.viewport})
@@ -155,14 +188,15 @@ class BrowserControl:
         try:
             self.page=await host.view_page(self.user,self.run)
             self.original_viewport=self.page.viewport_size
+            self.fit_only=hasattr(host,'mode_info') and host.mode_info(self.user)['mode']=='visible'
             await self.resize(**self.viewport)
             context=host.contexts[self.user]
             self.client=await context.new_cdp_session(self.page)
             self.client.on('Page.screencastFrame',self.on_frame)
-            await self.client.send('Page.startScreencast',{'format':'jpeg','quality':85,'maxWidth':2400,'maxHeight':1600,'everyNthFrame':1})
-            await self.send({'type':'ready',**self.viewport})
+            await self.start_frames()
+            await self.send({'type':'ready','fit_only':self.fit_only,**self.viewport})
             # Some headless pages do not paint until foregrounded.
-            await self.client.send('Page.bringToFront')
+            if not self.fit_only:await self.client.send('Page.bringToFront')
             jobs=[asyncio.create_task(self.display()),asyncio.create_task(self.commands())]
             done,_=await asyncio.wait(jobs,return_when=asyncio.FIRST_COMPLETED)
             for job in done:await job
@@ -176,11 +210,11 @@ class BrowserControl:
                         await self.client.send('Page.stopScreencast')
                         await self.client.detach()
                 except (BrowserError,TimeoutError):pass
-            if self.page and self.original_viewport and not self.page.is_closed():
+            if self.page and not self.page.is_closed():
                 try:
                     async with asyncio.timeout(3):
                         await self.cancel_pointer()
-                        await self.page.set_viewport_size(self.original_viewport)
+                        if not self.fit_only and self.original_viewport:await self.page.set_viewport_size(self.original_viewport)
                 except (BrowserError,TimeoutError):self.restore_failed=True
             if host.controls.get(self.user) is self:host.controls.pop(self.user,None)
             self.closed.set()

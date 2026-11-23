@@ -44,10 +44,10 @@ async def serve(app):
     raise TimeoutError('Local service did not start')
 
 
-async def main(only_itinerary=False,only_hotel=False,only_defaults=False):
+async def main(only_itinerary=False,only_hotel=False,only_defaults=False,only_discovery=False):
     for name in ('httpx','mcp','deepagents.profiles.harness.harness_profiles'):logging.getLogger(name).setLevel(logging.ERROR)
     production=config.RUNTIME;key=config.keychain_key();report={'cases':[],'status':'running'}
-    path=production/('availability-defaults-evaluation.json' if only_defaults else 'named-hotel-evaluation.json' if only_hotel else 'itinerary-evaluation.json' if only_itinerary else 'travel-evaluation.json')
+    path=production/('travel-discovery-evaluation.json' if only_discovery else 'availability-defaults-evaluation.json' if only_defaults else 'named-hotel-evaluation.json' if only_hotel else 'itinerary-evaluation.json' if only_itinerary else 'travel-evaluation.json')
     def save():path.write_text(json.dumps(report,indent=2))
     original_agents=dict(AGENT_PORTS);original_companies=dict(COMPANY_PORTS);address=config.TEMPORAL_ADDRESS
     day=datetime.now(ZoneInfo(config.TIMEZONE)).date()+timedelta(days=14)
@@ -74,6 +74,8 @@ async def main(only_itinerary=False,only_hotel=False,only_defaults=False):
                 engine.browser_tasks.delegate=no_browser
                 await service.availability.start()
                 async def turn(case,sid,text,expected):
+                    if only_discovery and not case['name'].startswith('Discovery:'):return []
+                    if not only_discovery and case['name'].startswith('Discovery:'):return []
                     if only_defaults and not case['name'].startswith('Defaults:'):return []
                     if not only_defaults and case['name'].startswith('Defaults:'):return []
                     if only_itinerary and case['name']!='Dubai full requested ten-day itinerary':return []
@@ -112,6 +114,38 @@ async def main(only_itinerary=False,only_hotel=False,only_defaults=False):
                 def business(results,reply):
                     category('flights')(results,reply)
                     assert any('business' in r['criteria'].get('cabin','') for r in results),'Cabin correction missing'
+
+                if only_discovery:
+                    from personal_agent.travel_planning import TravelPlans
+                    plans=TravelPlans(database)
+                    case,sid=new_case('Discovery: loose trip to flexible dates to preparation')
+                    def inspiration(results,reply):
+                        draft=plans.load(user,sid)
+                        assert draft and len(draft['destinations'])==3,'Expected three researched destination candidates'
+                        assert not results,'Exploration must not enter availability validation'
+                        assert reply.count('?')<=1,'Too many clarification questions'
+                        assert not service.availability.store.rows('SELECT * FROM subscriptions')
+                        assert not service.availability.store.rows('SELECT * FROM monitors')
+                    await turn(case,sid,'I can take two weeks off. Somewhere warm with good food and a relaxed pace. I do not know where or when; just choose and show three options.',inspiration)
+                    draft=plans.load(user,sid) or {}
+                    selected=next(iter(draft.get('destinations',[])),{}).get('name','Portugal')
+                    def windows(results,reply):
+                        draft=plans.load(user,sid)
+                        assert draft and len(draft['windows'])==3,'Expected three sourced flexible-date windows'
+                        assert {w['label'] for w in draft['windows']}=={'best_overall_fit','potential_value','seasonal_fit'}
+                        assert not results,'Unknown origin must not force flight inventory checks'
+                        assert not service.availability.store.rows('SELECT * FROM subscriptions')
+                        assert not service.availability.store.rows('SELECT * FROM monitors')
+                    await turn(case,sid,f'{selected} sounds good. Dates are flexible; show three two-week windows and explain the value without inventing flight prices. I have not picked a departure airport.',windows)
+                    dates=(plans.load(user,sid) or {}).get('windows',[])
+                    chosen=next(iter(dates),{'start_date':start,'end_date':end})
+                    await turn(case,sid,f'Now check hotel availability in {selected} for {chosen["start_date"]} through {chosen["end_date"]}, two guests and one room. Keep this a hotel-only check.',category('hotels'))
+                    def preparation(results,reply):
+                        draft=plans.load(user,sid)
+                        assert draft and draft['preparation'],'Expected a preparation checklist'
+                        assert not results,'Preparation must not restart availability checks'
+                        assert not any(item['status']=='completed' for item in draft['preparation']),'No real-world preparation action was executed'
+                    await turn(case,sid,'Help me prepare: suggest gear I may need and a logistics checklist. I might already own walking shoes. Do not buy, submit forms, book appointments, or create reminders.',preparation)
 
                 if only_defaults:
                     def combined_defaults(results,reply):
@@ -194,15 +228,15 @@ async def main(only_itinerary=False,only_hotel=False,only_defaults=False):
 
                 case,sid=new_case('Explicit monitor and cancellation')
                 await turn(case,sid,f'Monitor business class flights from JFK to Dubai on {start} for 1 passenger every five minutes.',category('flights'))
-                if not only_itinerary and not only_hotel and not only_defaults:assert service.availability.monitors(user),'Explicit monitoring did not create a schedule'
+                if not only_itinerary and not only_hotel and not only_defaults and not only_discovery:assert service.availability.monitors(user),'Explicit monitoring did not create a schedule'
                 await turn(case,sid,'Stop that flight monitor',lambda results,reply:None)
-                if not only_itinerary and not only_hotel and not only_defaults and any(m['state']=='active' for m in service.availability.monitors(user)):case['turns'][-1].update(status='failed',failure='Monitor remained active after cancellation')
+                if not only_itinerary and not only_hotel and not only_defaults and not only_discovery and any(m['state']=='active' for m in service.availability.monitors(user)):case['turns'][-1].update(status='failed',failure='Monitor remained active after cancellation')
 
                 research=[]
                 for row in service.availability.store.rows('SELECT result FROM tasks WHERE user_id=?',(user,)):
                     research.extend(json.loads(row['result']).get('research',[]))
                 report['component_checks']=[]
-                checks=[] if only_itinerary or only_hotel or only_defaults else [('dining','dining',{'venue':'Nobu','location':'New York','date':start,'party_size':2}),
+                checks=[] if only_itinerary or only_hotel or only_defaults or only_discovery else [('dining','dining',{'venue':'Nobu','location':'New York','date':start,'party_size':2}),
                     ('travel','hotels',{'hotel':'The Plaza','destination':'New York','check_in':start,'check_out':end,'guests':2,'rooms':1})]
                 for role,domain,c in checks:
                     task=Task(request_id='research-'+secrets.token_hex(12),user_id=user,session_id=database.new_session(user),source_message_id=0,
@@ -214,7 +248,7 @@ async def main(only_itinerary=False,only_hotel=False,only_defaults=False):
                     print(json.dumps({'component':role,'status':'passed' if ok else 'failed'}),flush=True)
                 report['subagent_web_searches']={'attempted':len(research),'completed':sum(r.get('status')=='completed' for r in research)}
                 report['cases']=[c for c in report['cases'] if c['turns']]
-                report['status']='passed' if all(t['status']=='passed' for c in report['cases'] for t in c['turns']) and all(c['status']=='passed' for c in report['component_checks']) and (only_hotel or report['subagent_web_searches']['completed']) else 'failed'
+                report['status']='passed' if all(t['status']=='passed' for c in report['cases'] for t in c['turns']) and all(c['status']=='passed' for c in report['component_checks']) and (only_hotel or only_discovery or report['subagent_web_searches']['completed']) else 'failed'
                 report['turns']=sum(len(c['turns']) for c in report['cases']);save()
                 print(json.dumps({'status':report['status'],'turns':report['turns'],'subagent_web_searches':report['subagent_web_searches'],'report':str(path)}),flush=True)
                 await service.close();service=None;await engine.browser_tasks.close();await engine.client.close()
@@ -228,4 +262,4 @@ async def main(only_itinerary=False,only_hotel=False,only_defaults=False):
 
 if __name__=='__main__':
     import sys
-    asyncio.run(main(only_itinerary='--itinerary' in sys.argv,only_hotel='--hotel' in sys.argv,only_defaults='--defaults' in sys.argv))
+    asyncio.run(main(only_itinerary='--itinerary' in sys.argv,only_hotel='--hotel' in sys.argv,only_defaults='--defaults' in sys.argv,only_discovery='--discovery' in sys.argv))

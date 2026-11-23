@@ -2,12 +2,14 @@
 import hashlib
 import json
 import re
+import os
+from dataclasses import dataclass
 from urllib.parse import urlsplit
 
-READ_ACTIONS={'wait','switch','close','extract','search_page','find_elements','find_controls','inspect_selector','scroll','find_text','screenshot','dropdown_options','done','request_user'}
+READ_ACTIONS={'wait','switch','close','extract','read_page','search_page','find_elements','find_controls','inspect_selector','scroll','find_text','screenshot','dropdown_options','done','request_user'}
 WRITE_ACTIONS={'click','click_selector','hover_selector','drag_selector','input','upload_file','select_dropdown','send_keys','navigate','go_back','request_domain'}
 ALLOWED_ACTIONS=READ_ACTIONS|WRITE_ACTIONS
-RISK=re.compile(r'\b(?:buy(?:\s+now)?|pay(?:ment)?|place\s+(?:order|reservation)|order\s+now|purchase|book(?:\s+now)?|reserve|delete|remove|send|submit|post|publish|confirm|subscribe|save|sign\s*(?:in|out|up)|log\s*(?:in|out)|cancel|accept|enroll|register|transfer|withdraw|redeem|donate|authorize|agree|activate|update)\b',re.I)
+RISK=re.compile(r'\b(?:buy(?:\s+now)?|pay(?:ment)?|place\s+(?:order|reservation)|order\s+now|purchase|book(?:\s+now)?|reserve|delete|remove|send|submit|post|publish|confirm|subscribe|save|sign\s*(?:in|out|up)|log\s*(?:in|out)|cancel|accept|enroll|register|transfer|withdraw|redeem|donate|authorize|agree|activate|update|close\s+(?:account|card|subscription|membership)|open\s+(?:account|credit\s+line))\b',re.I)
 CART_ADD=re.compile(r'^(?:add\s+to\s+(?:cart|bag|basket)|add\s+(?:item\s+)?to\s+(?:my\s+)?(?:cart|bag|basket))(?:\s*[($:].*)?$',re.I)
 URL_MUTATION=re.compile(r'(?:^|[/=?&_-])(?:add|delete|remove|submit|send|publish|confirm|purchase|pay|cancel|logout|signout|subscribe)(?:$|[/=?&_-])',re.I)
 UI_ONLY=re.compile(r'^(?:(?:open|close|toggle)\s+)?(?:menu|navigation|search|filters?|sort|details?|size\s+(?:guide|chart)|gallery|photos?|images?|zoom|next\s+(?:photo|image)|previous\s+(?:photo|image))$|^(?:show|view|hide)\s+(?:more|less|details|filters|options)$',re.I)
@@ -25,6 +27,61 @@ PUBLIC_ATTRIBUTES=frozenset({
 ATTRIBUTE_RESTRICTION='Some requested attributes are restricted. Retry using public element metadata; field values and private attributes are excluded.'
 RESERVATION_ENTRY=re.compile(r'^(?:reserve\s+(?:a\s+)?table|book\s+(?:a\s+)?table|make\s+(?:a\s+)?reservation|reservations?|book\s+now|reserve\s+now)$',re.I)
 RESERVATION_PATH=re.compile(r'(?:^|/)(?:reservations?|reserve|book|booking|venues)(?:/|$)',re.I)
+
+
+@dataclass(frozen=True)
+class BrowserPolicy:
+    name:str
+    targeted_handoffs:bool
+    follow_providers:bool
+    routine_controls:bool
+    recovery_failures:int
+    recovery_same:int
+    max_steps:int
+    model_calls:int
+    task_seconds:int
+
+
+POLICIES={
+    'poc':BrowserPolicy('poc',True,True,True,12,3,45,60,600),
+    'strict':BrowserPolicy('strict',False,False,False,6,2,30,40,240),
+}
+
+
+def browser_policy(name=None):
+    value=name or os.environ.get('PERSONAL_AGENT_BROWSER_POLICY','poc')
+    if value not in POLICIES:raise ValueError('Unknown browser policy')
+    return POLICIES[value]
+
+
+def policy_instructions(policy=None):
+    p=browser_policy(policy)
+    if p.name=='strict':return 'Browser policy: strict. Require explicit approval for provider transitions and consequential actions.'
+    return ('Browser policy: PoC. Complete routine browsing, searches, form navigation, ordinary field preparation, option selection and requested cart additions without conversational permission. '
+        'Color/size/date/time selection, applying filters, opening sign-in UI and ordinary Next/Continue steps do not need individual approvals. Prefer necessary-only or reject-optional choices on cookie banners when available. '
+        'Judge the actual target and form, not a risky-sounding word alone or an unrelated field elsewhere on the page. '
+        'Follow relevant observed public provider links/redirects; request_domain handles scope automatically. '
+        'Ask only for genuinely missing information that blocks the current task. An empty field is not by itself a blocker. '
+        'Final submissions/purchases/messages/destructive actions use the application approval flow; financial applications and transactions remain a direct user handoff. '
+        'Passwords, payment secrets, OTPs and genuine human verification remain manual. Never repeat a possibly completed submission. '
+        'Verification uncertainty is an unverified result, not proof that the requested option is unavailable.')
+
+
+def manual_action_required(name,params,observed,policy=None):
+    p=browser_policy(policy)
+    if not p.targeted_handoffs:return bool(observed.get('manual_required'))
+    if observed.get('human_required'):return True
+    node=observed.get('node') or {}
+    if re.search(r'i am not a robot|verify.{0,20}human|captcha',node.get('name',''),re.I) and name in {'click','click_selector','input','send_keys'}:return True
+    if name=='input' and PRIVATE.search(params.get('text','')):return True
+    if node.get('sensitive') and name not in READ_ACTIONS:return True
+    form=node.get('form') or {}
+    if form.get('sensitive'):
+        if name=='send_keys' and params.get('keys','').casefold() in {'enter','space'}:return True
+        if name in {'click','click_selector'} and (node.get('type') in {'submit','image'} or RISK.search(node.get('name',''))):return True
+    if form.get('financial') and ((name in {'click','click_selector'} and (node.get('type') in {'submit','image'} or RISK.search(node.get('name','')))) or name=='send_keys' and params.get('keys','').casefold()=='enter'):return True
+    # Older observations may not distinguish a field from a real challenge.
+    return bool(observed.get('manual_required') and 'human_required' not in observed and not observed.get('fields'))
 
 
 def sanitize_find_elements(params):
@@ -59,7 +116,7 @@ def search_action(name,params,observed):
 
 
 
-def navigation_action(name, params, observed):
+def navigation_action(name, params, observed,policy=None):
     """Proven page navigation, independent of website names and action history.
 
     A button's label alone is insufficient. Require a safe link destination,
@@ -90,7 +147,7 @@ def navigation_action(name, params, observed):
     if not restricted and not form and RESERVATION_ENTRY.fullmatch(label.strip()):
         if node.get('tag')=='A' and urlsplit(href).scheme in {'http','https'} and RESERVATION_PATH.search(urlsplit(href).path):return True
         if node.get('tag')=='BUTTON' and node.get('type')=='button' and node.get('has_popup')=='dialog':return True
-    if RISK.search(label):return False
+    if RISK.search(label) and not (browser_policy(policy).routine_controls and node.get('tag')=='A' and re.match(r'^(?:view|see|learn|explore|compare|shop|open|sign\s*in|log\s*in|apply\s+now)\b',label,re.I)):return False
     if node.get('tag') == 'A' and href:
         return urlsplit(href).scheme in {'http', 'https'}
     # Keyboard activation of a textbox may submit a form, even inside a header.
@@ -110,7 +167,35 @@ def fingerprint(value):
     return hashlib.sha256(json.dumps(value,sort_keys=True,ensure_ascii=False).encode()).hexdigest()
 
 
-def classify_action(name,params,observed,inspect_only=False):
+def routine_preparation(name,params,observed,inspect_only=False):
+    """PoC UI preparation, excluding private forms and commitment controls."""
+    node=observed.get('node') or {};form=node.get('form') or {}
+    if node.get('sensitive') or form.get('sensitive') or form.get('financial'):return False
+    if URL_MUTATION.search(action_url(node.get('href',''))) or URL_MUTATION.search(action_url(form.get('action',''))):return False
+    label=node.get('name','').strip();kind=node.get('type','');role=node.get('role','')
+    account=bool(re.search(r'/(?:account|settings|profile|security|billing|payment)(?:/|$)',urlsplit(observed.get('url','')).path,re.I))
+    if CART_ADD.fullmatch(label) or re.search(r'\b(?:add to (?:wishlist|favorites)|freeze|unfreeze|lock|unlock)\b',label,re.I):return False
+    if re.fullmatch(r'(?:execute|commit|finali[sz]e|finish|complete)(?:\s+(?:order|purchase|booking|reservation|application|checkout|payment))?',label,re.I):return False
+    if name=='input' and not account:
+        return kind=='search' or role=='searchbox' or node.get('search_context') or bool(re.search(r'\bsearch\b',label,re.I))
+    if name in {'click','click_selector'}:
+        # Opening sign-in UI is navigation; submitting credentials stays manual.
+        if re.fullmatch(r'(?:sign\s*in|log\s*in|login)',label,re.I) and not form and kind not in {'submit','image'}:
+            return not any(f.get('sensitive') or f.get('type')=='password' for f in (observed.get('fields') or []))
+        filter_action=bool(re.fullmatch(r'(?:apply|clear|reset|remove)(?:\s+(?:all|selected))?\s+filters?',label,re.I))
+        read_label=bool(re.fullmatch(r'(?:statements?|transactions?|activity|balances?|benefits?|rewards?|overview|details?)(?:\s+(?:history|overview|details|summary))?|(?:payment|billing)\s+history',label,re.I))
+        if filter_action and kind=='button' and not account:return True
+        if not inspect_only and re.fullmatch(r'next|continue|back|previous|save and continue|continue to (?:shipping|delivery|review|checkout)',label,re.I):
+            return kind in {'submit','button'}
+        if RISK.search(label):return False
+        if kind=='button' or role in {'button','radio','checkbox','option','tab','combobox','listbox'} or node.get('tag')=='SELECT':
+            if kind not in {'submit','image'} and (not account or read_label or UI_ONLY.fullmatch(label) or PREPARATION_CONTROL.search(label)):return True
+    if name=='select_dropdown' and not account and not RISK.search(label):return True
+    return False
+
+
+def classify_action(name,params,observed,inspect_only=False,policy=None):
+    profile=browser_policy(policy)
     if name not in ALLOWED_ACTIONS:return 'blocked','This action is disabled by the application.'
     node=observed.get('node') or {}
     if name=='request_user':return 'input',''
@@ -119,10 +204,13 @@ def classify_action(name,params,observed,inspect_only=False):
     if name=='find_elements' and any(a not in PUBLIC_ATTRIBUTES for a in params.get('attributes') or []):
         return 'blocked',ATTRIBUTE_RESTRICTION
     if name in READ_ACTIONS:return 'read',''
-    if observed.get('manual_required'):return 'blocked','Manual login or human verification is required; use request_user with kind=manual.'
-    navigation = navigation_action(name, params, observed)
-    if inspect_only and not navigation:return 'blocked','This recovery task is inspection only.'
+    if manual_action_required(name,params,observed,profile.name):return 'blocked','This control requires private input or human verification; use request_user with kind=manual.'
+    navigation = navigation_action(name, params, observed,profile.name)
+    routine=profile.routine_controls and routine_preparation(name,params,observed,inspect_only)
+    search=search_action(name,params,observed)
+    if inspect_only and not navigation and not routine and not (search and profile.routine_controls):return 'blocked','This recovery task is inspection only.'
     if navigation:return 'read',''
+    if routine or search:return 'preparation',''
     if name=='input' and (node.get('sensitive') or PRIVATE.search(params.get('text',''))):
         return 'blocked','Enter passwords, payment credentials, and secrets manually.'
     account=bool(re.search(r'/(?:account|settings|profile|security|billing|payment)(?:/|$)',urlsplit(observed.get('url','')).path,re.I))
@@ -141,12 +229,12 @@ def classify_action(name,params,observed,inspect_only=False):
             return 'preparation',''
         if params.get('keys') not in {'Enter','ENTER','Space','SPACE','Backspace','BACKSPACE','Delete','DELETE'}:
             return 'blocked','Only explicit navigation/editing keys are supported.'
-        if params.get('keys','').casefold() in {'backspace','delete'} and (node.get('tag') in {'INPUT','TEXTAREA'} or node.get('editable')) and not account and not node.get('sensitive'):return 'preparation',''
+        if params.get('keys','').casefold() in {'backspace','delete','space'} and (node.get('tag') in {'INPUT','TEXTAREA'} or node.get('editable')) and (not account or profile.routine_controls) and not node.get('sensitive'):return 'preparation',''
         if params.get('keys','').casefold() in {'enter','space'} and node.get('role') in {'button','link','checkbox','radio','option','tab','combobox','listbox'}:
-            return classify_action('click', {}, observed, inspect_only)
+            return classify_action('click', {}, observed, inspect_only,profile.name)
         return 'approval',''
-    if name=='input' and not account:return 'preparation',''
-    if name=='select_dropdown' and not account:return 'preparation',''
+    if name=='input' and (not account or profile.routine_controls):return 'preparation',''
+    if name=='select_dropdown' and (not account or profile.routine_controls):return 'preparation',''
     if name=='hover_selector':return 'preparation',''
     if name in {'click','click_selector'}:
         label=node.get('name','').strip();href=node.get('href','')
@@ -155,6 +243,10 @@ def classify_action(name,params,observed,inspect_only=False):
         if (node.get('tag') in {'INPUT','TEXTAREA'} and node.get('type') not in {'submit','button','image','checkbox','radio','file'}) or node.get('editable'):
             return 'preparation',''
         form=node.get('form')
+        if profile.routine_controls and not URL_MUTATION.search(action_url(href)):
+            if UI_ONLY.fullmatch(label) and node.get('type')=='button' and (not (form or {}).get('sensitive') or label.casefold() not in {'search','open search'}):return 'preparation',''
+            if PREPARATION_CONTROL.search(label) and not RISK.search(label) and node.get('type')=='button':return 'preparation',''
+            if label.casefold() in {'back','previous'} and node.get('type')=='button':return 'preparation',''
         form_submission=bool(form and (form.get('method','').lower() != 'get' or form.get('sensitive')))
         if UI_ONLY.fullmatch(label) and not form_submission and not URL_MUTATION.search(action_url(href)):
             return 'preparation',''
@@ -172,7 +264,8 @@ def classify_action(name,params,observed,inspect_only=False):
 def action_binding(name,params,observed):
     node=observed.get('node') or {}
     return fingerprint({'action':name,'parameters':params,'url':observed.get('url'),
-        'node':node,'destination_node':observed.get('destination_node'),'selections':observed.get('selections',[]),'prices':observed.get('prices',[])})
+        'node':node,'destination_node':observed.get('destination_node'),'selections':observed.get('selections',[]),'prices':observed.get('prices',[]),
+        **({'switch_target':observed.get('switch_target')} if name=='switch' else {})})
 
 
 def duplicate_key(name,params,observed):

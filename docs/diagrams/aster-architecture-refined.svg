@@ -1,0 +1,133 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="2200" height="1590" viewBox="0 0 2200 1590" role="img" aria-labelledby="title desc">
+<title id="title">Aster — agent harness architecture</title><desc id="desc">Deep Agent Harness coordinates intent, context assembly, planning, tool calling, subagents and verification. Memory is separated into short-term, long-term and proposed episodic recall. Browser actions have approval and verification boundaries. Independent Dining and Travel services use Company MCP. Temporal schedules and workflows handle explicit monitors, durable waits, callbacks and delivery.</desc>
+<defs>
+<marker id="94a3b8" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0 L10 5 L0 10" fill="#94a3b8" /></marker>
+<marker id="94a3b8-start" viewBox="0 0 10 10" refX="1" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M10 0 L0 5 L10 10" fill="#94a3b8" /></marker>
+<marker id="466ab2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0 L10 5 L0 10" fill="#466ab2" /></marker>
+<marker id="466ab2-start" viewBox="0 0 10 10" refX="1" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M10 0 L0 5 L10 10" fill="#466ab2" /></marker>
+<marker id="9270bd" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0 L10 5 L0 10" fill="#9270bd" /></marker>
+<marker id="9270bd-start" viewBox="0 0 10 10" refX="1" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M10 0 L0 5 L10 10" fill="#9270bd" /></marker>
+<marker id="1d928d" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0 L10 5 L0 10" fill="#1d928d" /></marker>
+<marker id="1d928d-start" viewBox="0 0 10 10" refX="1" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M10 0 L0 5 L10 10" fill="#1d928d" /></marker>
+<marker id="ce8d38" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0 L10 5 L0 10" fill="#ce8d38" /></marker>
+<marker id="ce8d38-start" viewBox="0 0 10 10" refX="1" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M10 0 L0 5 L10 10" fill="#ce8d38" /></marker>
+<linearGradient id="core" x2="0" y2="1"><stop stop-color="#f0f5ff" /><stop offset="1" stop-color="#e8effc" /></linearGradient>
+<filter id="shadow" x="-10%" y="-10%" width="120%" height="130%"><feDropShadow dx="0" dy="10" stdDeviation="14" flood-color="#273c65" flood-opacity="0.07" /></filter>
+</defs><g font-family="Inter, -apple-system, BlinkMacSystemFont, Arial, sans-serif">
+<rect x="0" y="0" width="2200" height="1590" rx="0" fill="#f7f9fd" stroke="#f7f9fd" stroke-width="2" />
+<rect x="80" y="65" width="9" height="75" rx="4" fill="#466ab2" stroke="#466ab2" stroke-width="2" />
+<text x="112" y="99" font-size="46" font-weight="700" fill="#17243d" text-anchor="start" letter-spacing="5">ASTER</text>
+<text x="112" y="139" font-size="29" font-weight="400" fill="#53627a" text-anchor="start">Agent harness architecture</text>
+<text x="2120" y="99" font-size="18" font-weight="700" fill="#64748b" text-anchor="end" letter-spacing="2">REFERENCE DESIGN</text>
+<rect x="80" y="218" width="500" height="132" rx="66.0" fill="#eef3ff" stroke="#c7d5ee" stroke-width="2" />
+<text x="330.0" y="262" font-size="26" font-weight="700" fill="#17243d" text-anchor="middle">Model gateway</text>
+<text x="330.0" y="297" font-size="21" font-weight="400" fill="#53627a" text-anchor="middle">Inference • routing • retries</text>
+<rect x="790" y="202" width="620" height="154" rx="77.0" fill="#edf5ff" stroke="#b9cfee" stroke-width="2" />
+<text x="1100.0" y="246" font-size="26" font-weight="700" fill="#17243d" text-anchor="middle">User &amp; application</text>
+<text x="1100.0" y="281" font-size="21" font-weight="400" fill="#53627a" text-anchor="middle">Chat • approvals • alerts</text>
+<rect x="1620" y="218" width="500" height="132" rx="22" fill="#fff" stroke="#dce3ee" stroke-width="2" />
+<text x="1650" y="260" font-size="25" font-weight="700" fill="#17243d" text-anchor="start">Identity &amp; policy</text>
+<text x="1650" y="297" font-size="21" font-weight="400" fill="#53627a" text-anchor="start">Access • credentials • budgets</text>
+<path d="M1100 356 V427" fill="none" stroke="#466ab2" stroke-width="3" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#466ab2)" marker-start="url(#466ab2-start)" />
+<rect x="986.3" y="375" width="227.4" height="34" rx="8" fill="#f7f9fd" stroke="#f7f9fd" stroke-width="2" />
+<text x="1100" y="398" font-size="20" font-weight="500" fill="#466ab2" text-anchor="middle">request / response</text>
+<path d="M580 284 H649 V469 H717" fill="none" stroke="#466ab2" stroke-width="3" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#466ab2)" marker-start="url(#466ab2-start)" />
+<rect x="588.15" y="357" width="125.7" height="34" rx="8" fill="#f7f9fd" stroke="#f7f9fd" stroke-width="2" />
+<text x="651" y="380" font-size="20" font-weight="500" fill="#466ab2" text-anchor="middle">inference</text>
+<rect x="80" y="430" width="500" height="590" rx="28" fill="#fff" stroke="#e0d9ef" stroke-width="2" />
+<text x="112" y="476" font-size="20" font-weight="700" fill="#7956aa" text-anchor="start" letter-spacing="1.6">MEMORY &amp; CONTEXT</text>
+<path d="M116,526 C116,499 544,499 544,526 L544,609 C544,636 116,636 116,609 Z" fill="#f3f0ff" stroke="#b8a9e8" stroke-width="2" />
+<path d="M116,526 C116,553 544,553 544,526" fill="none" stroke="#b8a9e8" stroke-width="2" />
+<text x="330.0" y="571" font-size="26" font-weight="700" fill="#503587" text-anchor="middle">Short-term</text>
+<text x="330.0" y="603" font-size="21" font-weight="400" fill="#6f608b" text-anchor="middle">Messages • checkpoints</text>
+<path d="M116,688 C116,661 544,661 544,688 L544,771 C544,798 116,798 116,771 Z" fill="#f3f0ff" stroke="#b8a9e8" stroke-width="2" />
+<path d="M116,688 C116,715 544,715 544,688" fill="none" stroke="#b8a9e8" stroke-width="2" />
+<text x="330.0" y="733" font-size="26" font-weight="700" fill="#503587" text-anchor="middle">Long-term</text>
+<text x="330.0" y="765" font-size="21" font-weight="400" fill="#6f608b" text-anchor="middle">Facts • preferences</text>
+<path d="M116,850 C116,823 544,823 544,850 L544,933 C544,960 116,960 116,933 Z" fill="#faf8ff" stroke="#b8a9e8" stroke-width="2" stroke-dasharray="7 5" />
+<path d="M116,850 C116,877 544,877 544,850" fill="none" stroke="#b8a9e8" stroke-width="2" />
+<text x="330.0" y="895" font-size="26" font-weight="700" fill="#503587" text-anchor="middle">Episodic recall *</text>
+<text x="330.0" y="927" font-size="21" font-weight="400" fill="#6f608b" text-anchor="middle">Past tasks • outcomes</text>
+<path d="M580 713 H717" fill="none" stroke="#9270bd" stroke-width="3" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#9270bd)" marker-start="url(#9270bd-start)" />
+<rect x="568.2" y="666" width="159.60000000000002" height="34" rx="8" fill="#f7f9fd" stroke="#f7f9fd" stroke-width="2" />
+<text x="648" y="689" font-size="20" font-weight="500" fill="#7956aa" text-anchor="middle">read / write</text>
+<g filter="url(#shadow)">
+<rect x="720" y="430" width="760" height="590" rx="34" fill="url(#core)" stroke="#a9bee4" stroke-width="2" />
+</g>
+<text x="1100" y="480" font-size="33" font-weight="700" fill="#153a72" text-anchor="middle">DEEP AGENT HARNESS</text>
+<text x="1100" y="516" font-size="21" font-weight="400" fill="#536c91" text-anchor="middle">Deep Agents + LangGraph</text>
+<polygon points="776,548 1062,548 1080,601 1062,654 776,654 758,601" fill="#fff" stroke="#c7d5ee" stroke-width="2" />
+<text x="919.0" y="591" font-size="25" font-weight="700" fill="#163d78" text-anchor="middle">01  Resolve intent</text>
+<text x="919.0" y="625" font-size="20" font-weight="400" fill="#586b86" text-anchor="middle">Goals • constraints</text>
+<rect x="1120" y="548" width="322" height="106" rx="18" fill="#fff" stroke="#c7d5ee" stroke-width="2" />
+<text x="1281.0" y="591" font-size="25" font-weight="700" fill="#163d78" text-anchor="middle">02  Load context</text>
+<text x="1281.0" y="625" font-size="20" font-weight="400" fill="#586b86" text-anchor="middle">Memory • task state</text>
+<rect x="800" y="683" width="600" height="64" rx="32" fill="#234b88" stroke="#234b88" stroke-width="2" />
+<text x="1100" y="724" font-size="23" font-weight="700" fill="#fff" text-anchor="middle">PLAN  →  ACT  →  OBSERVE  →  REFINE</text>
+<polygon points="776,778 1062,778 1080,831 1062,884 776,884 758,831" fill="#fff" stroke="#c7d5ee" stroke-width="2" />
+<text x="919.0" y="821" font-size="25" font-weight="700" fill="#163d78" text-anchor="middle">03  Call tools</text>
+<text x="919.0" y="855" font-size="20" font-weight="400" fill="#586b86" text-anchor="middle">Inputs • policy</text>
+<rect x="1120" y="778" width="322" height="106" rx="18" fill="#fff" stroke="#c7d5ee" stroke-width="2" />
+<text x="1281.0" y="821" font-size="25" font-weight="700" fill="#163d78" text-anchor="middle">04  Delegate work</text>
+<text x="1281.0" y="855" font-size="20" font-weight="400" fill="#586b86" text-anchor="middle">Tasks • isolated context</text>
+<rect x="758" y="910" width="684" height="72" rx="16" fill="#f8fbff" stroke="#c7d5ee" stroke-width="2" />
+<text x="1100" y="939" font-size="24" font-weight="700" fill="#163d78" text-anchor="middle">05  Verify &amp; respond</text>
+<text x="1100" y="968" font-size="19" font-weight="400" fill="#586b86" text-anchor="middle">Check results • update memory</text>
+<rect x="1620" y="430" width="500" height="590" rx="28" fill="#fff" stroke="#c6e6e3" stroke-width="2" />
+<text x="1652" y="476" font-size="20" font-weight="700" fill="#147e79" text-anchor="start" letter-spacing="1">TOOLS &amp; BROWSER ACTUATION</text>
+<rect x="1652" y="508" width="436" height="264" rx="18" fill="#f0faf8" stroke="#9bcfc9" stroke-width="2" />
+<path d="M1652 552 H2088" stroke="#9bcfc9" stroke-width="2" />
+<circle cx="1674" cy="530" r="5" fill="#69aaa5" />
+<circle cx="1692" cy="530" r="5" fill="#69aaa5" />
+<circle cx="1710" cy="530" r="5" fill="#69aaa5" />
+<text x="1870" y="601" font-size="26" font-weight="700" fill="#126f6b" text-anchor="middle">Browser Use → Chromium</text>
+<text x="1870" y="641" font-size="22" font-weight="400" fill="#467c78" text-anchor="middle">Observe → act → verify</text>
+<text x="1870" y="680" font-size="20" font-weight="400" fill="#467c78" text-anchor="middle">Profiles • human takeover</text>
+<rect x="1652" y="800" width="436" height="112" rx="56.0" fill="#eff8f6" stroke="#bbded9" stroke-width="2" />
+<text x="1870.0" y="844" font-size="26" font-weight="700" fill="#17243d" text-anchor="middle">Application tools</text>
+<text x="1870.0" y="879" font-size="21" font-weight="400" fill="#53627a" text-anchor="middle">Research • files • images</text>
+<text x="1870" y="987" font-size="19" font-weight="400" fill="#53627a" text-anchor="middle">Approvals for consequential actions</text>
+<path d="M1480 713 H1617" fill="none" stroke="#1d928d" stroke-width="3" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#1d928d)" marker-start="url(#1d928d-start)" />
+<rect x="1464.55" y="666" width="170.9" height="34" rx="8" fill="#f7f9fd" stroke="#f7f9fd" stroke-width="2" />
+<text x="1550" y="689" font-size="20" font-weight="500" fill="#147e79" text-anchor="middle">act / observe</text>
+<rect x="80" y="1130" width="640" height="270" rx="28" fill="#fff" stroke="#d7dded" stroke-width="2" />
+<text x="112" y="1175" font-size="20" font-weight="700" fill="#56678e" text-anchor="start" letter-spacing="1">INDEPENDENT SUBAGENTS</text>
+<polygon points="130,1203 370,1203 388,1221 388,1327 370,1345 130,1345 112,1327 112,1221" fill="#f1f3fc" stroke="#bcc7e2" stroke-width="2" />
+<text x="250" y="1250" font-size="24" font-weight="700" fill="#435b8c" text-anchor="middle">Dining DeepAgent</text>
+<text x="250" y="1286" font-size="17" font-weight="400" fill="#64748b" text-anchor="middle">Dining availability</text>
+<polygon points="434,1203 674,1203 692,1221 692,1327 674,1345 434,1345 416,1327 416,1221" fill="#f1f3fc" stroke="#bcc7e2" stroke-width="2" />
+<text x="554" y="1250" font-size="24" font-weight="700" fill="#435b8c" text-anchor="middle">Travel DeepAgent</text>
+<text x="554" y="1286" font-size="17" font-weight="400" fill="#64748b" text-anchor="middle">Hotels • flights</text>
+<text x="400" y="1380" font-size="20" font-weight="400" fill="#64748b" text-anchor="middle">Scoped tasks • independent checkpoints</text>
+<path d="M790 1020 V1065 H400 V1127" fill="none" stroke="#466ab2" stroke-width="3" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#466ab2)" marker-start="url(#466ab2-start)" />
+<rect x="432.95" y="1031" width="216.10000000000002" height="34" rx="8" fill="#f7f9fd" stroke="#f7f9fd" stroke-width="2" />
+<text x="541" y="1054" font-size="20" font-weight="500" fill="#466ab2" text-anchor="middle">delegate / return</text>
+<rect x="850" y="1130" width="640" height="270" rx="28" fill="#fff" stroke="#ebd5b3" stroke-width="2" />
+<text x="882" y="1175" font-size="20" font-weight="700" fill="#a66c25" text-anchor="start" letter-spacing="0.7">TEMPORAL • DURABLE EXECUTION</text>
+<circle cx="916" cy="1237" r="31" fill="#fff4e1" stroke="#dcae69" stroke-width="2" /><path d="M916 1218 V1237 L930 1246" fill="none" stroke="#b07b31" stroke-width="3" stroke-linecap="round" />
+<text x="969" y="1233" font-size="25" font-weight="700" fill="#94611f" text-anchor="start">Schedules</text>
+<text x="969" y="1265" font-size="19" font-weight="400" fill="#796345" text-anchor="start">Recurring monitors</text>
+<rect x="883" y="1291" width="574" height="63" rx="31" fill="#fff6e8" stroke="#ecd5b0" stroke-width="2" />
+<text x="1170" y="1318" font-size="22" font-weight="700" fill="#94611f" text-anchor="middle">Long-running workflows</text>
+<text x="1170" y="1344" font-size="18" font-weight="400" fill="#796345" text-anchor="middle">Wait • retry • resume</text>
+<path d="M1130 1020 V1127" fill="none" stroke="#ce8d38" stroke-width="3" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#ce8d38)" marker-start="url(#ce8d38-start)" />
+<rect x="988.05" y="1057" width="283.90000000000003" height="34" rx="8" fill="#f7f9fd" stroke="#f7f9fd" stroke-width="2" />
+<text x="1130" y="1080" font-size="20" font-weight="500" fill="#a66c25" text-anchor="middle">start / signal / resume</text>
+<path d="M720 1274 H847" fill="none" stroke="#ce8d38" stroke-width="3" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#ce8d38)" marker-start="url(#ce8d38-start)" />
+<rect x="1620" y="1130" width="500" height="270" rx="28" fill="#fff" stroke="#c6e6e3" stroke-width="2" />
+<text x="1652" y="1175" font-size="20" font-weight="700" fill="#147e79" text-anchor="start" letter-spacing="1">MCP • DOMAIN INTEGRATIONS</text>
+<rect x="1652" y="1200" width="436" height="111" rx="55.5" fill="#eff8f6" stroke="#bbded9" stroke-width="2" />
+<text x="1870.0" y="1244" font-size="26" font-weight="700" fill="#17243d" text-anchor="middle">Company MCP servers</text>
+<text x="1870.0" y="1279" font-size="21" font-weight="400" fill="#53627a" text-anchor="middle">Dining • Hotels • Flights</text>
+<text x="1870" y="1346" font-size="19" font-weight="400" fill="#467c78" text-anchor="middle">Search • watch • availability</text>
+<path d="M720 1205 H770 V1095 H1870 V1127" fill="none" stroke="#1d928d" stroke-width="3" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#1d928d)" marker-start="url(#1d928d-start)" />
+<rect x="1478.05" y="1061" width="283.90000000000003" height="34" rx="8" fill="#f7f9fd" stroke="#f7f9fd" stroke-width="2" />
+<text x="1620" y="1084" font-size="20" font-weight="500" fill="#147e79" text-anchor="middle">MCP calls</text>
+<path d="M1870 1400 V1430 H400 V1403" fill="none" stroke="#ce8d38" stroke-width="3" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#ce8d38)" stroke-dasharray="8 7" />
+<rect x="830.3" y="1414" width="679.4000000000001" height="34" rx="8" fill="#f7f9fd" stroke="#f7f9fd" stroke-width="2" />
+<text x="1170" y="1437" font-size="20" font-weight="500" fill="#a66c25" text-anchor="middle">Signed callbacks → subagents → Temporal</text>
+<rect x="80" y="1460" width="2040" height="66" rx="18" fill="#edf1f7" stroke="#e0e6f0" stroke-width="2" />
+<text x="1100" y="1501" font-size="21" font-weight="500" fill="#53627a" text-anchor="middle">Account isolation  •  Approvals  •  Audit &amp; traces  •  Cancellation</text>
+<text x="80" y="1561" font-size="18" font-weight="400" fill="#64748b" text-anchor="start">* Episodic recall: proposed extension</text>
+<text x="2120" y="1561" font-size="18" font-weight="400" fill="#64748b" text-anchor="end">Solid: calls / results     Dashed: events</text>
+</g></svg>

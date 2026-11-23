@@ -155,6 +155,11 @@ async def enrich(store,results):
     for result in leaves(results):
         if result['domain'] not in {'hotels','dining'}:continue
         c=result['criteria'];city=c.get('destination') or c.get('location','')
+        # A named unavailable venue has no options yet. Warm its presentation
+        # metadata now so an opening event can reuse it without delaying delivery.
+        name=c.get('hotel' if result['domain']=='hotels' else 'venue')
+        if result.get('status')=='completed' and not result.get('available') and name:
+            jobs.setdefault(key(result['domain'],name,city),(result['domain'],name,city,result.get('sources',[]),result.get('description','')))
         for option in result.get('options',[]):
             venue_key=key(result['domain'],option['name'],city)
             jobs.setdefault(venue_key,(result['domain'],option['name'],city,result.get('sources',[]),option.get('description') or result.get('description','')))

@@ -3,6 +3,7 @@ import re
 
 REQUEST_FAILURE='I couldn’t process that request. Please try again.'
 SAFE_INPUT_MESSAGES={
+    'Finish or cancel your active task before switching browser mode.',
     'Attach up to ten different files.',
     'Send attachments with a new question, rather than a command or paused-task reply.',
     'An attachment is unavailable or already sent. Select it again.',
@@ -10,7 +11,7 @@ SAFE_INPUT_MESSAGES={
     'Use the current approval buttons or its exact approval ID',
     'A run is already active','Choose Approve or Cancel','Approval already handled',
     'Enter a short response','Input already handled',
-    'Enter passwords and verification codes in the browser, then choose Continue',
+    'Enter passwords and verification codes in the browser, then choose Release control',
     'Complete the required website fields and any private login/verification step before continuing. The agent is still paused.',
     'Private login information must be entered in the browser',
     'Provide a venue name from the user request.','Provide the venue location/city.',

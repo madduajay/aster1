@@ -13,10 +13,10 @@ import sys
 os.environ.update(ANONYMIZED_TELEMETRY='false',BROWSER_USE_CLOUD_SYNC='false',BROWSER_USE_LOGGING_LEVEL='critical',
                   CDP_LOGGING_LEVEL='CRITICAL',BROWSER_USE_DISABLE_EXTENSIONS='1',DO_NOT_TRACK='1')
 sys.path.insert(0,str(Path(__file__).resolve().parent))
-from browser_policy import navigation_action, ALLOWED_ACTIONS, WRITE_ACTIONS, READ_ACTIONS, action_binding,sanitize_find_elements
+from browser_policy import navigation_action, ALLOWED_ACTIONS, WRITE_ACTIONS, READ_ACTIONS, action_binding,sanitize_find_elements,browser_policy,manual_action_required
 from browser_recovery import PAGE_OBSERVER, RecoveryBudget, combine_observations, input_need
 from browser_diagnostics import diagnostic_stage, exception_details, clean_message, safe_target
-from browser_connection import FreshObservationRequired, connection_error, resilient_browser
+from browser_connection import FreshObservationRequired, connection_error, resilient_browser, manual_handoff
 from browser_model import browser_model_options
 NONCE=None
 
@@ -38,7 +38,7 @@ const controlsNavigation=controlled.some(panel=>!panel.matches('form')&&!panel.q
 
 return {url:d.location.href,node:{tag:e.tagName,name:name.slice(0,300),role:control.getAttribute('role')||({A:'link',SELECT:'combobox',INPUT:{radio:'radio',checkbox:'checkbox'}[control.type]||'textbox'})[control.tagName]||'button',type:control.type||'',href:e.href||'',id:e.id,name_attr:control.name||'',disabled:!!control.disabled||control.getAttribute('aria-disabled')==='true',checked:control.checked??null,selected:control.getAttribute('aria-selected'),value:sensitive?'[hidden]':String(control.value||'').slice(0,500),sensitive,editable:e.isContentEditable,visible:visible(e),search_context:!!searchRoot,
 navigation_context:!!control.closest('nav,[role=navigation],[role=menubar],[role=menu]'),has_popup:control.getAttribute('aria-haspopup')||'',expanded:control.getAttribute('aria-expanded'),controls_navigation:controlsNavigation,details_toggle:control.tagName==='SUMMARY'&&control.parentElement?.tagName==='DETAILS',
-form:f?{method:(f.method||'get').toLowerCase(),action:f.action||d.location.href,role:f.getAttribute('role')||'',sensitive:!!f.querySelector('input[type=password],input[autocomplete^="cc-"],input[autocomplete="one-time-code"]')}:null}};
+form:f?{method:(f.method||'get').toLowerCase(),action:f.action||d.location.href,role:f.getAttribute('role')||'',sensitive:!!f.querySelector('input[type=password],input[autocomplete^="cc-"],input[autocomplete="one-time-code"]'),financial:/credit card application|apply for.{0,30}credit|social security|annual income|wire transfer|brokerage|bank transfer/i.test(f.innerText)}:null}};
 }"""
 OBSERVE_PAGE=PAGE_OBSERVER
 
@@ -60,6 +60,27 @@ async def frame_observations(browser,cdp):
     """Inspect visible same-origin and out-of-process child frames, never other tabs."""
     snapshots=[]
     tree=await cdp.cdp_client.send.Page.getFrameTree(session_id=cdp.session_id)
+    root=tree.get('frameTree',{})
+    nodes={}
+    def index(branch):
+        nodes[branch['frame']['id']]=branch
+        for child in branch.get('childFrames',[]):index(child)
+    index(root)
+    # Chrome's main target excludes OOPIFs. Browser Use supplies their frame
+    # identities; only descendants of this tab enter observation, never the
+    # contents of another tab returned in the target inventory.
+    frames,_=await browser.get_all_frames()
+    pending=list(frames.values())
+    while pending:
+        unresolved=[]
+        for frame in pending:
+            if frame['id'] in nodes:continue
+            parent=nodes.get(frame.get('parentFrameId') or frame.get('parentId'))
+            if parent is None:unresolved.append(frame);continue
+            branch={'frame':frame}
+            parent.setdefault('childFrames',[]).append(branch);index(branch)
+        if len(unresolved)==len(pending):break
+        pending=unresolved
     async def visit(branch,parent):
         for child in branch.get('childFrames',[])[:12]:
             fid=child['frame']['id'];client=parent
@@ -82,13 +103,21 @@ async def frame_observations(browser,cdp):
                 if frame:frame['focused']=flags.get('focused',False);snapshots.append(frame)
                 await visit(child,client)
             except Exception:continue  # Frame may detach during navigation; fresh observations follow.
-    await visit(tree.get('frameTree',{}),cdp)
+    await visit(root,cdp)
     return snapshots
 
 
 async def _observe(browser,params=None):
     with diagnostic_stage('browser_connection'):
         cdp=await browser.get_or_create_cdp_session()
+    if (params or {}).get('_switch_tab'):
+        # Switching leaves the current site. Bind permission to the destination
+        # tab's actual URL without reading its page or changing focus first.
+        target=await browser.get_target_id_from_tab_id(params['_switch_tab'])
+        info=await cdp.cdp_client.send.Target.getTargetInfo(params={'targetId':target})
+        current=await cdp.cdp_client.send.Target.getTargetInfo(params={'targetId':cdp.target_id})
+        return {'url':current['targetInfo']['url'],'target_id':cdp.target_id,
+                'switch_target':{'target_id':target,'url':info['targetInfo']['url']}}
     with diagnostic_stage('page_snapshot'):
         result=await cdp.cdp_client.send.Runtime.evaluate(params={'expression':OBSERVE_PAGE,'returnByValue':True},session_id=cdp.session_id)
         if result.get('exceptionDetails'):
@@ -196,7 +225,8 @@ async def main():
     logging.disable(logging.CRITICAL)
     seq=init.get('start_seq',0)
     inspected_selectors=set()
-    recovery=RecoveryBudget()
+    profile=browser_policy(init.get('policy'))
+    recovery=RecoveryBudget(max_failures=profile.recovery_failures,max_same=profile.recovery_same)
     class BudgetModel(BaseModel):
         calls=init.get('used_calls',0)
         async def ainvoke(self,*args,**kwargs):
@@ -204,17 +234,25 @@ async def main():
             if self.calls>init.get('model_call_limit',30):raise RuntimeError('Browser model budget reached')
             return await super().ainvoke(*args,**kwargs)
     llm=BudgetModel(model=init['model'],api_key=init.pop('key'),base_url='https://api.openai.com/v1',timeout=40,max_retries=init.get('model_max_retries',2),max_completion_tokens=4096,**browser_model_options(init['model']))
-    browser=resilient_browser(Browser)(cdp_url=init['cdp_url'],keep_alive=True,allowed_domains=init['allowed_domains'],
+    browser=resilient_browser(Browser)(cdp_url=init['cdp_url'],keep_alive=True,allowed_domains=['*'] if profile.follow_providers else init['allowed_domains'],
         enable_default_extensions=False,captcha_solver=False,auto_download_pdfs=False,cross_origin_iframes=True,highlight_elements=False,permissions=[],
         downloads_path=str(Path(init['workspace'])/'downloads'))
     async def ask_user(kind,prompt):
         nonlocal seq
         seq+=1
         state=await observe(browser)
+        if init.get('navigation_only') and kind=='information' and state.get('fields') and not state.get('human_required'):
+            return 'This task only opens the requested page. Do not collect form details. If the page has been reached, report done; the user will fill it themselves.'
         params={'kind':kind,'prompt':prompt}
-        emit({'type':'before','seq':seq,'operation':'request_user','params':params,'observed':state,'model_calls':llm.calls,'fingerprint':action_binding('request_user',params,state)})
         paused=__import__('time').monotonic()
-        reply=await receive()
+        detach=kind=='manual' and init.get('browser_mode','headless')!='visible'
+        async def receive_reply():
+            reply=await receive()
+            if reply.get('seq')!=seq or reply.get('decision')!='allow':raise EOFError('User input cancelled')
+            return reply
+        reply=await manual_handoff(browser,receive_reply,
+            lambda:emit({'type':'before','seq':seq,'operation':'request_user','params':params,'observed':state,'model_calls':llm.calls,'agent_detached':detach,'browser_mode':init.get('browser_mode','headless'),'fingerprint':action_binding('request_user',params,state)}),
+            detach=detach,refresh_on_release=kind=='manual' and not detach)
         recovery.started+=__import__('time').monotonic()-paused
         if reply.get('seq')!=seq or reply.get('decision')!='allow':
             raise EOFError('User input cancelled')
@@ -245,6 +283,7 @@ async def main():
                 action=action.__class__.model_validate({name:params})
             target_params=params if name in {'inspect_selector','click_selector','hover_selector','drag_selector'} else {k:v for k,v in params.items() if k not in {'selector','target_selector'}}
             if name=='send_keys':target_params={**target_params,'_focused':True}
+            if name=='switch':target_params={**target_params,'_switch_tab':params['tab_id']}
             if name not in ALLOWED_ACTIONS:return ActionResult(error='Action disabled by application policy.')
             if self.stopped:return ActionResult(is_done=True,success=False,extracted_content='Task stopped. Inspect the browser before retrying.')
             if name=='request_user':
@@ -259,11 +298,13 @@ async def main():
                 stage='check_user_input'
                 if self.uncertain and name not in READ_ACTIONS and not navigation_action(name, params, before):
                     return self.retry(name,params,before,'uncertain submission: inspect only')
-                need=input_need(before)
-                if need and (name=='done' or before.get('manual_required') and name not in READ_ACTIONS):
+                need=input_need(before,navigation_only=bool(init.get('navigation_only') and name=='done'),completion=bool(profile.targeted_handoffs and name=='done'))
+                private_step=manual_action_required(name,params,before,profile.name) and name not in READ_ACTIONS
+                if private_step and not need:need={'kind':'manual','prompt':'This website step needs your direct input. Complete it in the browser panel, then choose Release control.'}
+                if need and (name=='done' or private_step):
                     response=await ask_user(need['kind'],need['prompt'])
                     return ActionResult(extracted_content='The user supplied the missing step: '+response+'. Reinspect and continue the original goal.')
-                if name in {'click_selector','hover_selector','drag_selector'}:
+                if name in {'click_selector','hover_selector','drag_selector'} and not profile.routine_controls:
                     selectors=[params['selector']]+([params['target_selector']] if name=='drag_selector' else [])
                     if any((before.get('url'),selector) not in inspected_selectors for selector in selectors):
                         return ActionResult(error='First use inspect_selector on each exact selector. No action was dispatched.')
@@ -280,7 +321,7 @@ async def main():
                     self.stopped=True
                     return ActionResult(is_done=True,success=False,extracted_content=reply.get('reason','Browser action rejected; no action performed.'))
                 category=reply.get('category','')
-                if reply.get('allowed_domains'):
+                if reply.get('allowed_domains') and not profile.follow_providers:
                     browser_session.browser_profile.allowed_domains=reply['allowed_domains']
                 stage='revalidate_action'
                 current=await observe(browser_session,target_params)
@@ -295,7 +336,10 @@ async def main():
                     return ActionResult(is_done=True,success=False,extracted_content=ack.get('reason','Dispatch cancelled'))
                 dispatched=True
                 stage='execute_action'
-                result=await super().act(action,browser_session,**kwargs)
+                if name=='read_page':
+                    result=ActionResult(extracted_content=json.dumps({'url':before.get('url'),'title':before.get('title'),'text':before.get('text',''),
+                        'instruction':'Directly observed page text. Use these facts without another extraction. If the requested facts are absent, follow an observed relevant detail link or use targeted extraction for a larger document.'},ensure_ascii=False))
+                else:result=await super().act(action,browser_session,**kwargs)
                 if result.error:
                     emit({'type':'diagnostic','seq':seq,'details':{'operation':name,'stage':stage,'error_class':'ToolError','message':clean_message(result.error,[params.get('text'),(before.get('node') or {}).get('value')]),'dispatched':True,'target':safe_target(params,before),'trace':[]}})
                 stage='observe_after_action'
@@ -346,6 +390,9 @@ async def main():
                 emit({'type':'fault','seq':seq,'error_class':type(exc).__name__,'location':Path(frame.filename).name+':'+str(frame.lineno)})
                 return self.retry(name,params,before,'connection/action failure; inspect before continuing')
     tools=GuardedTools()
+    @tools.action('Read the current page text directly, without an extra extraction-model call. Prefer this for ordinary website details. Use extract only if these observed contents are insufficient. This action does not navigate or change the page.')
+    async def read_page(browser_session: BrowserSession):
+        return ActionResult(error='Direct reading is handled by the application.')
     @tools.action('Pause this task for missing non-secret information, or request manual website login/human verification. Use kind=information for phone numbers or other missing details; kind=manual for passwords, verification codes, payment secrets or CAPTCHA. Never ask for secrets in chat. The application persists the pause and resumes this same goal.')
     async def request_user(prompt: str,kind: str='information'):
         return ActionResult(extracted_content='User input is handled by the application.')
@@ -396,8 +443,8 @@ async def main():
     async def step(agent):
         await observe(browser)  # Repair transport before the library captures model state.
         emit({'type':'progress','step':agent.state.n_steps,'model_calls':llm.calls})
-    agent=Agent(task=init['task'],llm=llm,browser=browser,tools=tools,max_actions_per_step=1,max_failures=6,
-        use_vision=True,use_judge=False,calculate_cost=False,enable_signal_handler=False,directly_open_url=False,step_timeout=3600,
+    agent=Agent(task=init['task'],llm=llm,browser=browser,tools=tools,max_actions_per_step=1,max_failures=profile.recovery_failures,
+        use_vision='auto' if init.get('inspect_only') else True,use_judge=False,calculate_cost=False,enable_signal_handler=False,directly_open_url=False,step_timeout=3600,
         file_system_path=init['workspace'],available_file_paths=init.get('available_file_paths',[]),
         extend_system_message=init['instructions'],register_new_step_callback=None)
     async def run():

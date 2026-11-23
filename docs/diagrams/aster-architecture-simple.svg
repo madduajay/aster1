@@ -1,0 +1,66 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1800" height="1250" viewBox="0 0 1800 1250" role="img" aria-labelledby="title desc">
+<title id="title">Aster architecture — simplified</title><desc id="desc">A central Deep Agent Harness connects the user to memory, browser and tools, specialist agents with MCP, and Temporal schedules and long-running workflows. Episodic memory is proposed.</desc>
+<defs>
+<marker id="466ab2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0 L10 5 L0 10" fill="#466ab2"/></marker>
+<marker id="466ab2-start" viewBox="0 0 10 10" refX="1" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M10 0 L0 5 L10 10" fill="#466ab2"/></marker>
+<marker id="9270bd" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0 L10 5 L0 10" fill="#9270bd"/></marker>
+<marker id="9270bd-start" viewBox="0 0 10 10" refX="1" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M10 0 L0 5 L10 10" fill="#9270bd"/></marker>
+<marker id="1d928d" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0 L10 5 L0 10" fill="#1d928d"/></marker>
+<marker id="1d928d-start" viewBox="0 0 10 10" refX="1" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M10 0 L0 5 L10 10" fill="#1d928d"/></marker>
+<marker id="ce8d38" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0 L10 5 L0 10" fill="#ce8d38"/></marker>
+<marker id="ce8d38-start" viewBox="0 0 10 10" refX="1" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M10 0 L0 5 L10 10" fill="#ce8d38"/></marker>
+</defs><g font-family="Inter, -apple-system, BlinkMacSystemFont, Arial, sans-serif">
+<rect x="0" y="0" width="1800" height="1250" rx="0" fill="#f7f9fd" stroke="#f7f9fd" stroke-width="2"/>
+<rect x="80" y="65" width="7" height="65" rx="3" fill="#466ab2" stroke="#466ab2" stroke-width="2"/>
+<text x="110" y="100" font-size="42" font-weight="700" fill="#17243d" text-anchor="start" letter-spacing="4">ASTER</text>
+<text x="110" y="139" font-size="25" font-weight="400" fill="#64748b" text-anchor="start">Agent architecture</text>
+<text x="1720" y="103" font-size="17" font-weight="500" fill="#64748b" text-anchor="end" letter-spacing="2">REFERENCE DESIGN</text>
+<path d="M900 310 V407" fill="none" stroke="#466ab2" stroke-width="3" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#466ab2)" marker-start="url(#466ab2-start)"/>
+<path d="M470 590 H597" fill="none" stroke="#9270bd" stroke-width="3" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#9270bd)" marker-start="url(#9270bd-start)"/>
+<path d="M1200 590 H1327" fill="none" stroke="#1d928d" stroke-width="3" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#1d928d)" marker-start="url(#1d928d-start)"/>
+<path d="M750 770 V833 H580 V897" fill="none" stroke="#466ab2" stroke-width="3" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#466ab2)" marker-start="url(#466ab2-start)"/>
+<path d="M1050 770 V833 H1260 V897" fill="none" stroke="#ce8d38" stroke-width="3" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#ce8d38)" marker-start="url(#ce8d38-start)"/>
+<rect x="680" y="200" width="440" height="110" rx="55.0" fill="#edf5ff" stroke="#bfd2ef" stroke-width="2"/>
+<text x="900.0" y="244" font-size="26" font-weight="600" fill="#17243d" text-anchor="middle">User &amp; application</text>
+<text x="900.0" y="279" font-size="21" font-weight="400" fill="#53627a" text-anchor="middle">Chat • approvals • alerts</text>
+<rect x="600" y="410" width="600" height="360" rx="36" fill="#eaf1ff" stroke="#a9bee4" stroke-width="2"/>
+<text x="900" y="469" font-size="31" font-weight="700" fill="#153a72" text-anchor="middle">DEEP AGENT HARNESS</text>
+<text x="900" y="509" font-size="21" font-weight="400" fill="#536c91" text-anchor="middle">Deep Agents + LangGraph</text>
+<text x="900" y="561" font-size="27" font-weight="500" fill="#264e85" text-anchor="middle">Intent  →  Context  →  Plan</text>
+<rect x="652" y="595" width="496" height="66" rx="33" fill="#234b88" stroke="#234b88" stroke-width="2"/>
+<text x="900" y="637" font-size="25" font-weight="600" fill="#fff" text-anchor="middle">ACT  →  OBSERVE  →  REFINE</text>
+<text x="900" y="712" font-size="24" font-weight="500" fill="#264e85" text-anchor="middle">Tool calls • Delegation • Verification</text>
+<text x="275" y="391" font-size="21" font-weight="600" fill="#7956aa" text-anchor="middle" letter-spacing="2">MEMORY</text>
+<path d="M80,446 C80,425 470,425 470,446 L470,506 C470,527 80,527 80,506 Z" fill="#f3f0ff" stroke="#b8a9e8" stroke-width="2"/>
+<path d="M80,446 C80,467 470,467 470,446" fill="none" stroke="#b8a9e8" stroke-width="2"/>
+<text x="275" y="492" font-size="27" font-weight="500" fill="#624495" text-anchor="middle">Short-term</text>
+<path d="M80,560 C80,539 470,539 470,560 L470,620 C470,641 80,641 80,620 Z" fill="#f3f0ff" stroke="#b8a9e8" stroke-width="2"/>
+<path d="M80,560 C80,581 470,581 470,560" fill="none" stroke="#b8a9e8" stroke-width="2"/>
+<text x="275" y="606" font-size="27" font-weight="500" fill="#624495" text-anchor="middle">Long-term</text>
+<path d="M80,674 C80,653 470,653 470,674 L470,734 C470,755 80,755 80,734 Z" fill="#f3f0ff" stroke="#b8a9e8" stroke-width="2" stroke-dasharray="7 5"/>
+<path d="M80,674 C80,695 470,695 470,674" fill="none" stroke="#b8a9e8" stroke-width="2"/>
+<text x="275" y="720" font-size="27" font-weight="500" fill="#624495" text-anchor="middle">Episodic *</text>
+<rect x="1330" y="410" width="390" height="360" rx="24" fill="#eff9f7" stroke="#a7d6d0" stroke-width="2"/>
+<path d="M1330 456 H1720" stroke="#a7d6d0" stroke-width="2"/>
+<circle cx="1354" cy="433" r="5" fill="#79b5ad"/>
+<circle cx="1373" cy="433" r="5" fill="#79b5ad"/>
+<circle cx="1392" cy="433" r="5" fill="#79b5ad"/>
+<text x="1525" y="520" font-size="29" font-weight="600" fill="#126f6b" text-anchor="middle">Browser &amp; tools</text>
+<text x="1525" y="566" font-size="23" font-weight="400" fill="#467c78" text-anchor="middle">Browser Use • Chromium</text>
+<text x="1525" y="619" font-size="23" font-weight="400" fill="#467c78" text-anchor="middle">Research • Files • Images</text>
+<text x="1525" y="717" font-size="22" font-weight="500" fill="#126f6b" text-anchor="middle">Approve → Act → Verify</text>
+<rect x="300" y="900" width="560" height="210" rx="28" fill="#fff" stroke="#c9d3e8" stroke-width="2"/>
+<text x="580" y="943" font-size="28" font-weight="600" fill="#435b8c" text-anchor="middle">Specialist agents</text>
+<polygon points="350,967 542,967 558,995 542,1023 350,1023 334,995" fill="#eef1fb" stroke="#bcc7e2" stroke-width="2"/>
+<text x="446" y="1004" font-size="24" font-weight="500" fill="#435b8c" text-anchor="middle">Dining</text>
+<polygon points="614,967 806,967 822,995 806,1023 614,1023 598,995" fill="#eef1fb" stroke="#bcc7e2" stroke-width="2"/>
+<text x="710" y="1004" font-size="24" font-weight="500" fill="#435b8c" text-anchor="middle">Travel</text>
+<text x="580" y="1073" font-size="24" font-weight="500" fill="#147e79" text-anchor="middle">MCP → Company services</text>
+<rect x="1010" y="900" width="500" height="210" rx="42" fill="#fff6e8" stroke="#e8c997" stroke-width="2"/>
+<circle cx="1081" cy="959" r="24" fill="none" stroke="#c18b3b" stroke-width="2"/><path d="M1081 944 V959 L1092 966" fill="none" stroke="#c18b3b" stroke-width="3" stroke-linecap="round"/>
+<text x="1131" y="969" font-size="30" font-weight="600" fill="#94611f" text-anchor="start">Temporal</text>
+<text x="1260" y="1025" font-size="23" font-weight="500" fill="#94611f" text-anchor="middle">Schedules • Long-running workflows</text>
+<text x="1260" y="1072" font-size="23" font-weight="400" fill="#8b7352" text-anchor="middle">Wait • Retry • Resume</text>
+<text x="900" y="1188" font-size="22" font-weight="400" fill="#64748b" text-anchor="middle">Identity • Approvals • Observability</text>
+<text x="80" y="1227" font-size="17" font-weight="400" fill="#7d7290" text-anchor="start">* Episodic recall: proposed extension</text>
+</g></svg>

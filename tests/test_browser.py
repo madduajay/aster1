@@ -8,18 +8,24 @@ from personal_agent import browser_host as module,config
 from personal_agent.browser_host import BrowserHost,public_url
 
 
+
+
 async def test_private_destinations_rejected():
     for url in ['file:///etc/passwd','http://127.0.0.1','http://localhost','http://192.168.1.1','http://[::1]','https://example.com:55468']:
         with pytest.raises((ValueError,OSError)):await public_url(url)
 
 
-async def test_dedicated_profiles_cdp_and_cookie_persistence(database,users,monkeypatch):
+@pytest.mark.parametrize('browser_mode',['headless','visible'])
+async def test_dedicated_profiles_cdp_and_cookie_persistence(database,users,monkeypatch,browser_mode):
     if os.environ.get('RUN_BROWSER_TESTS')!='1':pytest.skip('Enable real Chromium tests')
     monkeypatch.setattr(module,'public_url',AsyncMock())
-    host=BrowserHost(database,headless=True)
+    monkeypatch.setenv('PLAYWRIGHT_BROWSERS_PATH',str(config.ROOT/'.runtime/playwright'))
+    host=BrowserHost(database,headless=browser_mode=='headless')
     first,second=users[0]['id'],users[1]['id']
     try:
-        c1=await host.context(first);c2=await host.context(second)
+        copies=await asyncio.gather(*(host.context(first) for _ in range(3)))
+        assert all(context is copies[0] for context in copies)
+        c1=copies[0];c2=await host.context(second)
         await c1.add_cookies([{'name':'session','value':'user01-only','url':'https://example.com','expires':2000000000}])
         assert (await c1.cookies('https://example.com'))[0]['value']=='user01-only'
         assert await c2.cookies('https://example.com')==[]
@@ -27,7 +33,7 @@ async def test_dedicated_profiles_cdp_and_cookie_persistence(database,users,monk
         await host.close_user(first)
         c1=await host.context(first)
         assert (await c1.cookies('https://example.com'))[0]['value']=='user01-only'
-        assert (config.RUNTIME/'browser-profiles'/first).is_dir()
+        assert host.profile_path(first).is_dir()
         with pytest.raises(LookupError):await host.context('../../outside')
     finally:await host.close()
 
@@ -40,10 +46,12 @@ async def test_profile_scope_requires_user_owned_run(database,users):
     with pytest.raises(ValueError):host.set_scope(users[0]['id'],'r',['outside.example'])
 
 
-async def test_preview_target_snapshot_and_user_isolation(database,users,monkeypatch):
+@pytest.mark.parametrize('browser_mode',['headless','visible'])
+async def test_preview_target_snapshot_and_user_isolation(database,users,monkeypatch,browser_mode):
     if os.environ.get('RUN_BROWSER_TESTS')!='1':pytest.skip('Enable real Chromium tests')
     import base64
-    host=BrowserHost(database)
+    monkeypatch.setenv('PLAYWRIGHT_BROWSERS_PATH',str(config.ROOT/'.runtime/playwright'))
+    host=BrowserHost(database,headless=browser_mode=='headless')
     first,second=users[0]['id'],users[1]['id']
     sid=database.new_session(first)
     database.execute("INSERT INTO runs(id,user_id,session_id,status,created) VALUES('view-one',?,?,'completed',0)",(first,sid))

@@ -81,6 +81,30 @@ class DOMReader:
     async def read(self,expression):
         client,root=await self.attach(self.page)
         if not allowed_url(root['frame']['url'],self.domains):raise ValueError('A website transition requires domain approval')
+        # Headed Chrome omits out-of-process children from the main target's
+        # frame tree. Attach to those Playwright Frame objects and join only
+        # by CDP frame/parent IDs (URLs are not frame identities).
+        nodes={}
+        def index(branch):
+            nodes[branch['frame']['id']]=branch
+            for child in branch.get('childFrames',[]):index(child)
+        index(root)
+        extra=[]
+        for frame in self.page.frames[:25]:
+            if frame.parent_frame is None:continue
+            try:
+                _,branch=await self.attach(frame)
+                if branch['frame']['id'] not in nodes:extra.append(branch)
+            except BrowserError:continue # Same-process children use their parent's target.
+        while extra:
+            unresolved=[]
+            for branch in extra:
+                parent=nodes.get(branch['frame'].get('parentId'))
+                if parent is None:unresolved.append(branch);continue
+                if branch['frame']['id'] not in nodes:
+                    parent.setdefault('childFrames',[]).append(branch);index(branch)
+            if len(unresolved)==len(extra):raise InspectionUnavailable()
+            extra=unresolved
         values=[]
         async def visit(branch,client,active,offset=(0,0),box=None,permitted=True):
             if len(values)>=25:return

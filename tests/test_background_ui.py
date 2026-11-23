@@ -164,3 +164,63 @@ async def test_company_alert_clear_login_persistence_and_watch_form(database,cre
             await browser.close()
     finally:
         await service.close();server.should_exit=True;await task;await dining_cleanup()
+
+
+@pytest.mark.skipif(os.environ.get('RUN_BROWSER_TESTS')!='1',reason='Real delayed-availability presentation')
+async def test_opening_updates_render_normal_photographed_tables_live_and_after_reload(database,users,credentials,monkeypatch):
+    import hashlib
+    from langchain_core.messages import AIMessage
+    from test_availability import service_for,D,H
+    from test_attachments import PNG
+    from availability.company import options
+    from availability.media import enrich,key
+    from playwright.async_api import async_playwright,expect
+    monkeypatch.setenv('PLAYWRIGHT_BROWSERS_PATH',str(config.ROOT/'.runtime/playwright'))
+    sock=socket.socket();sock.bind(('127.0.0.1',0));sock.listen()
+    monkeypatch.setattr(config,'ORIGIN',f'https://aster.localhost:{sock.getsockname()[1]}')
+    service=service_for(database,[AIMessage(content='Hi')]);uid=users[0]['id']
+    database.execute('UPDATE users SET must_change=0 WHERE id=?',(uid,))
+    sid=database.new_session(uid);database.message(uid,sid,'user','Let me know when the restaurant and hotel open up.')
+    image_id=hashlib.sha256(PNG).hexdigest();folder=config.RUNTIME/'venue-photos';folder.mkdir();(folder/image_id).write_bytes(PNG)
+    prepared=[]
+    for domain,c in [('dining',D),('hotels',H)]:
+        name=c.get('venue') or c['hotel'];venue_key=key(domain,name,'New York')
+        value={'photo_url':'/api/venue-photos/'+venue_key,'description':'A welcoming venue in New York.','image_id':image_id,'media':'image/png'}
+        service.availability.store.execute('INSERT INTO venue_metadata VALUES(?,?,?)',(venue_key,json.dumps(value),time.time()))
+        result={'domain':domain,'criteria':c,'available':True,'status':'completed','options':options(domain,c),'sources':[{'url':'https://venue.example/'+domain,'title':name}]}
+        await enrich(service.availability.store,[result]);prepared.append(result)
+    server=uvicorn.Server(uvicorn.Config(create_app(database,service),ssl_certfile=str(config.ROOT/'.runtime/tls/server.pem'),ssl_keyfile=str(config.ROOT/'.runtime/tls/server.key'),log_level='error',access_log=False))
+    task=asyncio.create_task(server.serve(sockets=[sock]))
+    try:
+        while not server.started:
+            if task.done():task.result()
+            await asyncio.sleep(.01)
+        async with async_playwright() as pw:
+            browser=await pw.chromium.launch(headless=True,chromium_sandbox=True)
+            page=await browser.new_page(viewport={'width':1200,'height':1000});errors=[]
+            page.on('pageerror',lambda e:errors.append(str(e)))
+            await page.goto(config.ORIGIN);await page.locator('#username').fill('user01');await page.locator('#password').fill(credentials['user01']);await page.locator('#password').press('Enter')
+            await expect(page.locator('#composer')).to_be_visible();await page.locator('#input').fill('Unsent draft')
+            for i,result in enumerate(prepared):
+                q={'id':'opening-ui-'+str(i),'user_id':uid,'session_id':sid}
+                service.availability.project(q,result);service.availability.project(q,result)
+            await page.evaluate('refreshBackground()')
+            for reload in (False,True):
+                if reload:await page.reload()
+                await expect(page.locator('.response-table table')).to_have_count(2)
+                await expect(page.get_by_role('columnheader',name='Available times',exact=True)).to_be_visible()
+                await expect(page.get_by_role('columnheader',name='Room',exact=True)).to_be_visible()
+                await expect(page.locator('.venue-preview')).to_have_count(2)
+                await expect(page.locator('.venue-copy a').filter(has_text='Carbone')).to_be_visible()
+                await expect(page.locator('.venue-copy a').filter(has_text='The Fifth Avenue Hotel')).to_be_visible()
+                assert await page.locator('.venue-preview img').evaluate_all('imgs=>imgs.every(img=>img.complete&&img.naturalWidth>0)')
+                if not reload:await expect(page.locator('#input')).to_have_value('Unsent draft')
+            await page.locator('#alerts').click()
+            await expect(page.locator('#alerts')).to_be_hidden()
+            await expect(page.locator('.response-table table')).to_have_count(2)
+            await page.evaluate('refreshBackground()')
+            await expect(page.locator('.response-table table')).to_have_count(2)
+            assert not errors
+            await browser.close()
+    finally:
+        server.should_exit=True;await task;await service.close();await service.engine.client.close();sock.close()

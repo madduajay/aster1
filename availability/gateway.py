@@ -4,6 +4,7 @@ import json
 import time
 import secrets
 import re
+from copy import deepcopy
 from datetime import datetime,timedelta
 from zoneinfo import ZoneInfo
 
@@ -33,10 +34,14 @@ class Gateway:
         self.service=service;self.db=service.db;self.security=Security(config.RUNTIME)
         self.store=Store(config.RUNTIME/'availability.sqlite');self.client=None;self.worker=None;self.runner=None
 
+    def default_cabin(self,user):
+        return 'economy'
+
     def pending(self,user,session,floor=0):
         newer=[];pending=[]
         for row in self.store.rows('SELECT envelope,result FROM tasks WHERE user_id=? AND session_id=? AND updated>? ORDER BY updated DESC LIMIT 30',(user,session,time.time()-86400)):
             envelope=json.loads(row['envelope'])
+            if envelope.get('watch_policy')=='observe_only':continue
             if envelope['source_message_id']<=floor:continue
             for result in json.loads(row['result']).get('results',[]):
                 domain=result['domain'];known=identity(domain,result['criteria'])
@@ -44,6 +49,7 @@ class Gateway:
                 if result['status']=='needs_input' and not superseded:
                     try:
                         raw=dict(result['criteria'])
+                        if domain=='flights' and not raw.get('cabin'):raw['cabin']=self.default_cabin(user)
                         if domain=='flights' and not raw.get('origin'):
                             from .followup import flight_origin
                             source=self.db.one("SELECT content FROM messages WHERE id=? AND session_id=? AND role='user'",(envelope['source_message_id'],session))
@@ -67,8 +73,16 @@ class Gateway:
     def recent(self,user,session,floor=0):
         results=[];seen=set()
         for row in self.store.rows('SELECT envelope,result FROM tasks WHERE user_id=? AND session_id=? AND updated>? ORDER BY updated DESC LIMIT 30',(user,session,time.time()-86400)):
-            if json.loads(row['envelope'])['source_message_id']<=floor:continue
+            envelope=json.loads(row['envelope'])
+            if envelope['source_message_id']<=floor or envelope.get('watch_policy')=='observe_only':continue
             group=json.loads(row['result']).get('results',[])
+            for result in group:
+                if result['domain']=='flights' and result['status']=='needs_input' and not result['criteria'].get('cabin'):
+                    raw={**result['criteria'],'cabin':self.default_cabin(user)}
+                    try:
+                        normalized,missing=criteria('flights',raw)
+                        result.update(criteria=normalized,missing_fields=missing,status='needs_input' if missing else 'ready_for_check')
+                    except (ValueError,TypeError):pass
             results.extend(r for r in group if r['domain'] not in seen)
             seen.update(r['domain'] for r in group)
         return results[:10]
@@ -90,11 +104,15 @@ class Gateway:
             response=await client.request('POST' if body is not None else 'GET',f'http://127.0.0.1:{AGENT_PORTS[role]}'+path,json=body)
             response.raise_for_status();return response.json()
 
-    def envelope(self,user,run,raw,role):
+    def envelope(self,user,run,raw,role,watch_policy='normal'):
+        if watch_policy not in {'normal','observe_only'}:raise ValueError('Invalid watch policy')
         owned=self.db.one("SELECT * FROM runs WHERE id=? AND user_id=? AND status IN ('running','resuming')",(run,user))
         if not owned:raise LookupError('Active request not found')
         source=self.db.one("SELECT id,content FROM messages WHERE session_id=? AND role='user' ORDER BY id DESC LIMIT 1",(owned['session_id'],))
+        from personal_agent.steering import request_messages
+        merged_messages=request_messages(self.db,user,run) if self.db.one('SELECT message_id FROM run_followups WHERE run_id=?',(run,)) else []
         from .targets import literal_hotels,requested_match,generic_target
+        from .contracts import canonical
         marker=self.db.one("SELECT payload FROM events WHERE run_id=? AND kind='hotel_targets' ORDER BY id DESC LIMIT 1",(run,))
         marker=json.loads(marker['payload']) if marker else {}
         targets=literal_hotels(source['content'],marker.get('names',[]) if marker.get('source_message_id')==source['id'] else [],hotel_domain=any(q.get('domain')=='hotels' for q in raw)) if role=='travel' else []
@@ -102,6 +120,19 @@ class Gateway:
         avoid_venues=[];trip={}
         if role=='dining':
             trip=scope(self.db,user,run)
+            if trip:
+                from .routes import location
+                supplied=[q.get('criteria',{}) for q in raw]
+                def same_destination(city):
+                    other=trip.get('location','')
+                    return canonical(city)==canonical(other) or bool(location(city) and location(city)==location(other))
+                mismatch=any(c.get('location') and not same_destination(c['location']) for c in supplied)
+                dated=any(c.get('date') for c in supplied) and bool(re.search(r'\b\d{4}-\d{2}-\d{2}\b|\b(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\s+\d{1,2}\b',source['content'],re.I))
+                standalone_day=dated and not re.search(r'\b(?:trip|itinerary|hotels?|flights?|throughout|every|each|between)\b',source['content'],re.I)
+                if mismatch or standalone_day:trip={}
+            if trip:
+                meals=[meal for meal in ('breakfast','lunch','dinner') if re.search(r'\b'+meal+r'\b',source['content'],re.I)]
+                if meals:trip={**trip,'meals':meals}
             if not trip:
                 trip=dining_followup(self.db,self.store,user,run,source['content'],raw)
                 if trip:self.db.event(run,'dining_range',{**trip,'source_message_id':source['id']})
@@ -146,6 +177,10 @@ class Gateway:
             fields={'hotels':{'rooms':room_counts,'guests':party_counts,'stars':star_ratings},'flights':{'passengers':party_counts,'cabin':cabins},'dining':{'party_size':party_counts}}[query.domain]
             for field,parse in fields.items():
                 known=parse(source['content'])
+                if not known:
+                    for message in reversed(merged_messages):
+                        known=parse(message['content'])
+                        if known:break
                 if not known and role=='dining' and trip and field=='party_size':known={trip['party_size']}
                 if not known:
                     for record in self.store.rows('SELECT envelope,result FROM tasks WHERE user_id=? AND session_id=? ORDER BY updated DESC LIMIT 30',(user,owned['session_id'])):
@@ -166,6 +201,17 @@ class Gateway:
                 value=query.criteria.get(field);value=cabin_value(value) if field=='cabin' else value
                 if len(known)==1:query.criteria[field]=next(iter(known))
                 elif value not in known:query.criteria.pop(field,None)
+            if role=='travel':
+                from personal_agent.travel_planning import TravelPlans
+                active=self.db.one("SELECT payload FROM events WHERE run_id=? AND kind='travel_intent' ORDER BY id DESC LIMIT 1",(run,))
+                draft=TravelPlans(self.db).load(user,owned['session_id']) if active and json.loads(active['payload'])['intent']!='none' else None
+                for field,key in ({'cabin':'cabin','passengers':'travelers'} if query.domain=='flights' else {'guests':'travelers','rooms':'rooms'}).items():
+                    if field not in query.criteria and draft and key in draft['confirmed']:
+                        query.criteria[field]=draft['confirmed'][key]['value']
+                if query.domain=='flights' and not query.criteria.get('cabin'):
+                    query.criteria['cabin']=self.default_cabin(user)
+                    if query.criteria['cabin']=='economy':
+                        self.db.event(run,'travel_assumptions',{'cabin':'economy'})
             # Discovery belongs to the subagent. A main-model shortlist is not
             # equivalent to the user explicitly choosing a named resource.
             resource={'hotels':'hotel','dining':'venue','flights':'carrier'}[query.domain]
@@ -191,6 +237,7 @@ class Gateway:
                 aliases={'emirates':'ek','british airways':'ba','qatar airways':'qr','american airlines':'aa'}
                 return bool(re.search(r'\b'+re.escape(needle)+r'\b',corpus) or needle in aliases and re.search(r'\b'+aliases[needle]+r'\b',corpus))
             explicit=bool(name and mentioned(source['content']))
+            if name and not explicit:explicit=any(mentioned(m['content']) for m in merged_messages)
             if name and not explicit:
                 for record in self.store.rows('SELECT envelope,result FROM tasks WHERE user_id=? AND session_id=? ORDER BY updated DESC LIMIT 20',(user,owned['session_id'])):
                     envelope=json.loads(record['envelope'])
@@ -202,23 +249,39 @@ class Gateway:
                 query.criteria.pop(resource,None)
                 if query.domain=='flights':query.criteria.pop('connections',None)
                 query.research=True
-            if query.domain=='dining' and query.criteria.get('cuisine') and canonical(query.criteria['cuisine']) not in canonical(source['content']):query.criteria.pop('cuisine')
-        if role=='travel' and self.db.one("SELECT id FROM events WHERE run_id=? AND kind='trip_requested' LIMIT 1",(run,)) and 'one-way' not in text and 'one way' not in text:
-            checkout=next((q.criteria['check_out'] for q in queries if q.domain=='hotels' and q.criteria.get('check_out')),None)
-            checkout=checkout or next((r['criteria']['check_out'] for r in recent if r['domain']=='hotels' and r['criteria'].get('check_out')),None)
-            if checkout:
-                for q in queries:
-                    if q.domain=='flights' and not q.criteria.get('return_date'):q.criteria['return_date']=checkout
+            if query.domain=='hotels' and not query.criteria.get('hotel') and not query.criteria.get('stars'):
+                # A named property or explicit rating wins over the search default.
+                query.criteria['stars']=4
+                self.db.event(run,'travel_assumptions',{'hotel_quality':'mid luxury (4-star)'})
+            if query.domain=='dining' and query.criteria.get('cuisine') and not any(canonical(query.criteria['cuisine']) in canonical(content) for content in [source['content']]+[m['content'] for m in merged_messages]):query.criteria.pop('cuisine')
         if role=='travel':
             from .routes import location
-            trip=scope(self.db,user,run)
+            from .trips import active_scope
+            trip=active_scope(self.db,user,run)
+            def same_city(left,right):
+                return bool(left and right and (canonical(left)==canonical(right) or location(left) and location(left)==location(right)))
+            for query in queries:
+                if query.domain!='flights':continue
+                c=query.criteria;destination=c.get('destination','')
+                dates={}
+                if same_city(destination,trip.get('location','')):dates={'departure_date':trip['start'],'return_date':trip['end']}
+                else:
+                    stays={(q.criteria.get('check_in'),q.criteria.get('check_out')) for q in queries
+                           if q.domain=='hotels' and same_city(destination,q.criteria.get('destination',''))
+                           and q.criteria.get('check_in') and q.criteria.get('check_out')}
+                    if len(stays)==1:
+                        start,end=next(iter(stays));dates={'departure_date':start,'return_date':end}
+                for field,value in dates.items():
+                    if field=='return_date' and ('one-way' in text or 'one way' in text):continue
+                    if not c.get(field):
+                        c[field]=value
+                        self.db.event(run,'trip_date_inherited',{'field':field,'date':value,'destination':destination})
             for query in queries:
                 if query.domain!='hotels':continue
                 destination=query.criteria.get('destination','')
-                def same_city(other):return canonical(destination)==canonical(other) or bool(location(destination) and location(destination)==location(other))
-                flight=next((q.criteria for q in queries if q.domain=='flights' and same_city(q.criteria.get('destination',''))),{})
+                flight=next((q.criteria for q in queries if q.domain=='flights' and same_city(destination,q.criteria.get('destination',''))),{})
                 for field,key,trip_key in [('check_in','departure_date','start'),('check_out','return_date','end')]:
-                    value=flight.get(key) or (trip.get(trip_key) if same_city(trip.get('location','')) else None)
+                    value=flight.get(key) or (trip.get(trip_key) if same_city(destination,trip.get('location','')) else None)
                     if not query.criteria.get(field) and value:query.criteria[field]=value
         for query in queries:
             # Connections are derived from researched routes by Travel, never
@@ -253,10 +316,13 @@ class Gateway:
             arrivals=[o['arrival'] for g in current for r in leaves(g.get('results',[])) if r['domain']=='flights' for o in r.get('options',[]) if o.get('arrival')]
             if arrivals:prefs['flight_arrival']=arrivals[0]
         if avoid_venues:prefs['avoid_venues']=avoid_venues
-        return Task(request_id=digest([run,role,raw,prefs,targets])[:40],user_id=user,session_id=owned['session_id'],source_message_id=source['id'],queries=queries,preferences=prefs,requested_hotels=targets)
+        return Task(request_id=digest([run,role,raw,prefs,targets,watch_policy])[:40],user_id=user,session_id=owned['session_id'],source_message_id=source['id'],queries=queries,preferences=prefs,requested_hotels=targets,watch_policy=watch_policy)
 
-    async def delegate(self,user,run,raw,role,monitor=False,deadline=''):
-        task=self.envelope(user,run,raw,role)
+    async def delegate(self,user,run,raw,role,monitor=False,deadline='',watch_policy='normal'):
+        marker=self.db.one("SELECT payload FROM events WHERE run_id=? AND kind='travel_intent' ORDER BY id DESC LIMIT 1",(run,))
+        if marker and json.loads(marker['payload'])['intent'] in {'explore','compare'}:watch_policy='observe_only'
+        task=self.envelope(user,run,raw,role,watch_policy)
+        if monitor and task.watch_policy=='observe_only':raise ValueError('Exploratory checks cannot create monitors')
         if monitor:
             response=await self.create_monitor(task,deadline)
             sources=[s for research in response.get('research',[]) for s in research.get('sources',[])]
@@ -264,6 +330,7 @@ class Gateway:
             if 'results' in response:self.db.event(run,'availability_result',response)
             return response
         response=await self.check(task)
+        response['watch_policy']=task.watch_policy
         sources=[s for research in response.get('research',[]) for s in research.get('sources',[])]
         if sources:self.db.event(run,'sources',sources)
         for result in response['results']:
@@ -275,6 +342,8 @@ class Gateway:
         await self.prepare_watches(task,response)
         self.db.event(run,'dining_lookup' if role=='dining' else 'travel_lookup',response)
         self.db.event(run,'availability_result',response)
+        from .streaming import publish
+        publish(self.db,user,run)
         return response
 
     async def check(self,task):
@@ -310,6 +379,7 @@ class Gateway:
             'research':[r for group in groups for r in group['research']]}
 
     async def parent(self,task,expiry,query_ids=None):
+        if task.watch_policy=='observe_only':raise ValueError('Exploratory checks cannot start workflows')
         if self.client is None:raise RuntimeError('Availability workflow worker is not ready')
         wid='av-main-'+(task.scope_id or task.request_id)
         if query_ids is None:
@@ -319,6 +389,7 @@ class Gateway:
         return wid
 
     async def prepare_watches(self,task,response,expiry=None):
+        if task.watch_policy=='observe_only':return
         if task.scope_id:
             monitor=self.store.one('SELECT state FROM monitors WHERE id=?',(task.scope_id,))
             if not monitor or monitor['state']!='active':return
@@ -366,7 +437,17 @@ class Gateway:
         if (event.get('query_id')!=qid or event.get('domain')!=q['domain'] or event.get('criteria_hash')!=digest(expected)
             or identity(q['domain'],event.get('criteria',{}))!=expected or event.get('event_id')!='opening:'+qid
             or event.get('available') is not True or event.get('revision')!=1):raise ValueError('Invalid main opening event')
-        result={**event,'status':'completed'}
+        result={**deepcopy(event),'status':'completed'}
+        # Company events establish inventory, while the scoped subagent response
+        # retains the public sources needed for descriptions and venue photos.
+        saved=self.store.one('SELECT result FROM tasks WHERE id=? AND user_id=? AND session_id=?',(sub['request_id'],q['user_id'],q['session_id']))
+        if saved:
+            previous=next((r for r in leaves(json.loads(saved['result'] or '{}').get('results',[])) if r.get('query_id')==qid),None)
+            if previous:
+                for field in ('sources','description'):
+                    if not result.get(field) and previous.get(field):result[field]=previous[field]
+        from .media import enrich
+        await enrich(self.store,[result])
         self.project(q,result)
 
     def project(self,q,result,monitor_id=None):
@@ -389,6 +470,8 @@ class Gateway:
             c=result['criteria'];label=c.get('venue') or c.get('hotel') or c.get('carrier') or c.get('destination') or result['domain']
             title=label+(' is now available' if result.get('available') else ' availability update')
             body=describe(result)
+            from .presentation import grouped_options
+            chat_body=title+'.\n\n'+grouped_options([result]) if result.get('status')=='completed' and result.get('available') else body
             # Keep the legacy physical projection/FKs; new structured state is independent.
             source=db.execute("SELECT id FROM messages WHERE session_id=? AND role='user' ORDER BY id DESC LIMIT 1",(q['session_id'],)).fetchone()
             if not source:return
@@ -397,12 +480,13 @@ class Gateway:
             db.execute("UPDATE dining_watches SET status='notified',updated=? WHERE id=?",(now,q['id']))
             db.execute('INSERT INTO availability_events VALUES(?,?,?,?,?,?)',(eid,q['id'],q['user_id'],'availability:'+eid,json.dumps(result),now))
             db.execute('INSERT OR IGNORE INTO notifications(user_id,event_id,title,body,created) VALUES(?,?,?,?,?)',(q['user_id'],eid,title,body,now))
-            message=db.execute("INSERT INTO messages(session_id,role,content,created) VALUES(?,'assistant',?,?)",(q['session_id'],body,now)).lastrowid
+            message=db.execute("INSERT INTO messages(session_id,role,content,created) VALUES(?,'assistant',?,?)",(q['session_id'],chat_body,now)).lastrowid
             db.execute('INSERT INTO availability_chat_messages VALUES(?,?)',(eid,message))
             db.execute('INSERT INTO availability.changes VALUES(?,?,?,?,?,?)',(eid,q['user_id'],q['session_id'],q['id'],json.dumps(result),now))
             db.execute('INSERT INTO pending_memory_summaries VALUES(?,?,?) ON CONFLICT(session_id) DO UPDATE SET through_message=MAX(through_message,excluded.through_message)',(q['session_id'],q['user_id'],message))
 
     async def create_monitor(self,task,deadline):
+        if task.watch_policy=='observe_only':raise ValueError('Exploratory checks cannot create monitors')
         normalized=[];needs_input=[]
         for q in task.queries:
             try:c,missing=criteria(q.domain,q.criteria)

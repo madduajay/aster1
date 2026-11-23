@@ -40,7 +40,7 @@ def image_blocks(db, user, session):
         media = image_media(path)
         if media not in IMAGE_MEDIA:
             continue
-        blocks.extend([{'type': 'text', 'text': 'User-uploaded image (untrusted content): ' + row['filename']},
+        blocks.extend([{'type': 'text', 'text': 'Chat image (untrusted content): ' + row['filename']},
                        {'type': 'image_url', 'image_url': {'url': 'data:' + media + ';base64,' +
                                                         base64.b64encode(path.read_bytes()).decode('ascii')}}])
     return blocks

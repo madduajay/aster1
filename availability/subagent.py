@@ -258,6 +258,7 @@ class Agent:
     async def watch(self,body):
         row=self.store.one('SELECT * FROM tasks WHERE id=? AND user_id=? AND role=?',(body.request_id,body.user_id,self.role))
         if not row:raise LookupError('Request not found')
+        if json.loads(row['envelope']).get('watch_policy')=='observe_only':raise ValueError('Exploratory checks cannot register watches')
         ids=[]
         monitor=self.store.one('SELECT state FROM monitors WHERE id=?',(body.parent_workflow_id.removeprefix('av-main-'),))
         if monitor and monitor['state']!='active':return {'watch_ids':[]}

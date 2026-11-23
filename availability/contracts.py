@@ -36,6 +36,7 @@ class Task(BaseModel):
     preferences:dict=Field(default_factory=dict)
     requested_hotels:list[str]=Field(default_factory=list,max_length=10)
     scope_id:str=''
+    watch_policy:Literal['normal','observe_only']='normal'
 
 
 class WatchRequest(BaseModel):

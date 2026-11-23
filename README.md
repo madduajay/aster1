@@ -4,6 +4,10 @@ A local personal agent for macOS, built with FastAPI, DeepAgents/LangGraph, Open
 
 This checkout includes application source, setup files, tests and validation scripts. Private runtime data, passwords, API keys, browser profiles, logs, archives and virtual environments are ignored by Git.
 
+Story-writing requests include one polished illustration by default, including trip stories, unless the user explicitly requests text only or no pictures. The main agent calls `generate_illustration`, which creates or edits an image and checks it against the accompanying prose and user request. GPT-Image-2.6 Sunburst is the default generator (`PERSONAL_AGENT_IMAGE_MODEL` can override it); GPT-6.1 Terra performs the visual check. The existing API account needs access and credits for both models. Images are private to the owning user/chat. One failed check permits one correction attempt, with at most three scenes per request. A passed check improves alignment but cannot guarantee a perfect match. No dining/travel subagent or Company MCP participates in image creation.
+
+Browser interaction defaults to the shared **PoC policy** in `personal_agent/browser_policy.py`: routine controls and ordinary form preparation proceed automatically, observed public provider links/redirects can extend the current task scope, and empty fields do not block a page-opening goal. Explicit URL navigation can be verified directly; other outcomes still use the independent verifier. An unchanged approval can be reused only before dispatch; changed state or a possibly executed submission cannot reuse it. The bounded profile allows 45 browser steps, 60 browser model calls, 12 recoveries (at most 3 for the same failure), and a ten-minute foreground task window. Final commitments and manual private/human-verification steps remain distinct from preparation. Set `PERSONAL_AGENT_BROWSER_POLICY=strict` before starting Aster to restore conservative actuation and provider approvals. Saved browser profiles and runtime data remain local and excluded from Git.
+
 ## Requirements
 
 - macOS with Python 3.12 and its standard Keychain Access utility.
@@ -57,13 +61,45 @@ Open **https://aster.localhost:55468**. Setup provisions ten local accounts, `us
 
 ## Chat and images
 
+Messages sent while a task is running in the same chat join that task. Aster combines the original request with additional instructions at its next planning step, keeping completed tool results rather than restarting the work. Later corrections override conflicting details. Files can be attached to these follow-ups. Stop/New Chat retain their cancellation behavior; browser approval and manual-input pauses still require their own controls. Requested itineraries proceed to the relevant subagents automatically without a separate trip-brief confirmation.
+
 The UI supports formatted response cards, short answers by default, browser preview and manual takeover, and action approval cards. Recommendations automatically trigger web research, including follow-up requests. Click **+** in the composer to select files, or drag and drop them. Image thumbnails stay inside the message box while you type your question. Remove an attachment with its × button, or press Enter to send the images and question together as one message. Files are uploaded only when you send; a failed send preserves the question and attachments for retry. Sent image previews remain visible when reopening the chat. PNG, JPEG, WebP and GIF are recognized. General files have a 50 MB limit; images have a 20 MB limit, with up to four recent images supplied to the model within a combined 20 MB budget. Generic documents are available for approved website uploads; general document parsing is not included.
 
 Sessions and persistent preferences are separate. Useful commands include `/sessions`, `/open SESSION_ID`, `/files`, `/memory`, `/remember TEXT`, `/forget ID`, `/forget all`, `/correct ID TEXT`, `/debug` and `/stop`. Private website credentials and verification codes belong in the interactive browser takeover, not chat. Consequential browser actions require their displayed approval.
 
 Browser inspection reads public link, form, accessibility and test-ID attributes. Unsupported attributes and field values are omitted automatically instead of terminating a discovery query. Clear reservation-entry links and dialog openers proceed without an extra approval; final booking submissions, payments, account changes and private login fields retain their existing protections.
 
+## Browser modes
+
+Use the **Browser** selector in the chat header:
+
+- **Headless** (default): bundled Chromium without a desktop window.
+- **Visible**: installed Chrome starts with the tested minimal arguments; Playwright attaches afterward and Browser Use shares that session. It uses Chrome's normal keychain/cookie handling, natural window dimensions and native display pixel ratio. Preview and input coordinates follow the current CSS viewport without resizing the website to fit the sidebar. Aster does not tile, reposition, minimize, or hide the window.
+
+Choose **Take control** to enter information in the wider right-side browser panel while keeping chat visible. **Release control**, at the top of the browser panel, continues a paused task with Browser Use once the website step is complete; after a completed task it simply ends manual control. **Return to chat** closes the panel without resuming a paused task. On narrow screens the panel uses the available screen width.
+
+Cancel task stays beside Take control in the browser header. It stops pending work, closes the Aster-owned browser and its preview, and retains the saved profile. Returning to the website later starts a new browser request.
+
+Both modes use native browser networking without Aster request interception. During manual website login or verification, the agent pauses without model calls or browser actions. Visible keeps Browser Use connected and idle, matching the isolated login test; Headless disconnects its Browser Use attachment. **Release control** refreshes page references before continuing, reconnecting Headless to the same tab when needed. These defaults persist across tasks and application restarts. Passive network diagnostics remain available.
+
+Related preview questions first run a fresh read-only Browser Use inspection. These reads use page text first, with optional screenshots and direct reading rather than repeated extraction-model calls. A continuation reuses evidence from that request and checks only the specific missing facts. Web search is a fallback when the page cannot supply sufficient verified information. A topic change retires the preview and its browser working context; returning to that subject requires a new browser task. Chat history and explicit saved preferences remain available.
+
+For a fresh Visible session, Aster opens a scoped public entry URL in native Chrome before attaching browser tools. Explicit user URLs take precedence; account lookups can reuse a previously observed login entry page for that user and domain. Session parameters are excluded. Existing open sessions are not navigated by this startup step.
+
+Visible uses the normal Chrome service-worker policy, matching the isolated minimal-launch tests. Headless retains its existing persistent-context configuration. Chrome's control endpoint is loopback-only; Aster owns and closes only its dedicated Chrome process.
+
+
+Finish or cancel active tasks before changing browser engine; switching closes browser tabs and may discard unsubmitted fields. No application restart is needed to switch modes. The choice is saved per user.
+
+Headless uses `.runtime/browser-profiles/<user>/`; visible Chrome uses `.runtime/chrome-profiles/<user>/`. Saved logins are retained in these separate profiles. An imported copy of a personal Chrome profile stays local; Aster does not control the original personal profile. Browser Use and Playwright share the same Aster-owned browser.
+
 ## Dining, travel and background memory
+
+Travel can start with loose guidelines. Aster researches three destination ideas and recommends one, or compares three flexible date windows, before requiring exact booking details. It discloses provisional defaults (economy, mid luxury (four-star) hotels, two travelers and one room; seven days when duration is unspecified) and keeps them separate from confirmed choices. Missing departure airport does not block destination or seasonal ideas. Comparisons use researched evidence, not a market-wide cheapest-fare engine. Exploratory checks never create watches or monitors. Requested itineraries stream in order: dates/defaults, flights, hotels, then verified days. Partial day plans remain provisional until every date is complete; reconnects replay saved sections without duplicating them.
+
+When a trip request already specifies its destination and date range, Aster proceeds directly to the relevant Travel and Dining checks. Day-by-day plans add targeted sightseeing research after those delegations; they do not restart destination discovery or require a separate trip-brief confirmation.
+
+Travel drafts survive restart within their owning chat and are invalidated by context clearing or excluded evidence. Preparation covers gear, transfers, connectivity, documents, forms and appointments using existing research and browser tools. Purchases, submissions and bookings retain inline approval; no preparation reminders are added. The opt-in `.venv/bin/python -m validation.travel_matrix --discovery` uses paid models/search against isolated local inventory and Temporal, with browser execution disabled, and writes `.runtime/travel-discovery-evaluation.json`.
 
 Dining and travel now use independent DeepAgent services. Dining delegates to Company Dining MCP; Travel delegates to separate Hotels and Flights MCP endpoints. Opening events return through signed subagent webhooks and Temporal, then appear in the original chat and alerts. Explicit monitoring requests create native Temporal Schedules at the requested interval, with a five-minute default and one-minute minimum. See [the service architecture, sequence diagram and operating instructions](docs/availability-subagents.md).
 
@@ -104,6 +140,8 @@ RUN_BROWSER_TESTS=1 .venv/bin/python -m pytest -q
 ```
 
 Browser tests use isolated accounts and synthetic services. Live acceptance scripts can call paid models; read their caps and scope before running them. The old pytest failure cache can contain names of tests that were renamed; current test output is authoritative.
+
+
 
 Local Git tracks source and tests. `_to_delete/` is an ignored review area for old test artifacts, archives and snapshots; its cleanup manifest records their original paths and hashes. Nothing is permanently removed by the maintenance cleanup.
 

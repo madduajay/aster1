@@ -9,6 +9,7 @@ MEALS={'breakfast':('08:00','08:30'),'lunch':('12:30','13:00'),'dinner':('19:00'
 def dining_followup(db,store,user,run,text,queries):
     """Resolve a range reference from scoped travel records, not a single date."""
     refers=re.search(r'\b(?:between|during|for|on|over)\s+(?:those|these|the same)\s+(?:days|dates)\b|\b(?:throughout|during|for)\s+(?:my |the |our )?(?:trip|stay)\b|\b(?:every|each)\s+day\b|\b(?:whole|entire)\s+(?:trip|stay)\b',text,re.I)
+    refers=refers or re.search(r'\b(?:also|add|include|combine)\b.*\b(?:dining|restaurants?|venues?|breakfast|lunch|dinner)\b',text,re.I)
     if not refers:return {}
     owned=db.one('SELECT session_id FROM runs WHERE id=? AND user_id=?',(run,user))
     if not owned:return {}
@@ -17,6 +18,13 @@ def dining_followup(db,store,user,run,text,queries):
     from .contracts import canonical,leaves
     from .routes import location
     def matches(city):return not supplied or any(canonical(city)==canonical(c) or location(city) and location(city)==location(c) for c in supplied)
+    # A selected working trip is stronger than an arbitrary earlier comparison.
+    active=active_scope(db,user,run)
+    if active and matches(active.get('location','')):
+        explicit_date=re.search(r'\b\d{4}-\d{2}-\d{2}\b|\b(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\s+\d{1,2}\b',text,re.I)
+        if explicit_date and any(q.get('criteria',{}).get('date') for q in queries):return {}
+        meals=[meal for meal in MEALS if re.search(r'\b'+meal+r'\b',text,re.I)]
+        return {**active,'meals':meals or list(MEALS)}
     for row in store.rows('SELECT envelope,result FROM tasks WHERE user_id=? AND session_id=? ORDER BY updated DESC LIMIT 30',(user,owned['session_id'])):
         envelope=json.loads(row['envelope'])
         if envelope['source_message_id']<=floor:continue
@@ -66,6 +74,27 @@ def scope(db,user,run):
         if not 0<=(end-start).days<=30 or not result.get('location') or not 1<=result['party_size']<=20:return {}
     except (KeyError,ValueError,TypeError):return {}
     return result
+
+
+def active_scope(db,user,run):
+    """Reuse the latest scoped trip across follow-ups, never an older/different trip."""
+    current=scope(db,user,run)
+    if current:return current
+    if db.one("SELECT id FROM events WHERE run_id=? AND kind='trip_requested' LIMIT 1",(run,)):return {}
+    owned=db.one('SELECT session_id FROM runs WHERE id=? AND user_id=?',(run,user))
+    if not owned:return {}
+    floor=db.owned_session(user,owned['session_id'])['context_floor']
+    previous=db.one("""SELECT e.run_id,e.payload FROM events e JOIN runs r ON r.id=e.run_id
+        WHERE r.user_id=? AND r.session_id=? AND e.kind='trip_requested' ORDER BY e.id DESC LIMIT 1""",
+        (user,owned['session_id']))
+    if not previous:return {}
+    source=json.loads(previous['payload']).get('source_message',0)
+    if source<=floor:return {}
+    from personal_agent.travel_planning import TravelPlans
+    draft=TravelPlans(db).load(user,owned['session_id'])
+    if draft and draft['created_message_id']>source:return {}
+    if db.one('SELECT message_id FROM context_exclusions WHERE message_id=?',(source,)):return {}
+    return scope(db,user,previous['run_id'])
 
 
 def dining_queries(trip):

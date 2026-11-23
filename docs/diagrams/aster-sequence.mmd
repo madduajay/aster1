@@ -1,0 +1,75 @@
+---
+title: Aster — Request Execution Sequence
+config:
+  theme: base
+  themeVariables:
+    primaryColor: '#edf3fd'
+    primaryTextColor: '#19263e'
+    primaryBorderColor: '#466ab2'
+    actorBkg: '#edf3fd'
+    actorBorder: '#466ab2'
+    actorTextColor: '#19263e'
+    signalColor: '#234c86'
+    noteBkgColor: '#f2eeff'
+    noteBorderColor: '#b9a6de'
+  sequence:
+    mirrorActors: false
+    messageMargin: 30
+---
+sequenceDiagram
+    participant U as User & app
+    participant H as Deep Agent Harness
+    participant M as Memory & context
+    participant B as Tools & browser
+    participant S as Dining / Travel subagents
+    participant C as Company MCP
+    participant T as Temporal
+
+    rect rgb(237,243,253)
+    U->>H: Request + constraints
+    Note over H: Validate identity & policy
+    H->>M: Load scoped context
+    M-->>H: Messages, preferences & checkpoint
+    Note over H: Resolve intent · plan next step
+    end
+
+    opt Specialist domain task
+      H->>S: Delegate scoped work
+      S->>C: Search / availability
+      C-->>S: Structured results
+      S-->>H: Results + evidence
+    end
+    opt Application tool
+      H->>B: Research, files or image generation
+      B-->>H: Evidence / artifact
+    end
+    opt Browser task
+      H->>B: Browser goal + confirmed details
+      Note over B: Observe → act → verify
+      opt Consequential action
+        B->>H: Approval request
+        H->>U: Ask approval
+        U->>H: Approve / reject
+        H->>B: Proceed only if approved
+      end
+      B-->>H: Verified outcome / explicit blocker
+    end
+
+    rect rgb(237,243,253)
+    Note over H: Check evidence · reconcile results
+    H-->>U: Stream verified output as ready
+    Note over U,H: Trip example: flights → hotels → days
+    H->>M: Save checkpoint + eligible memory
+    Note over M: Assumptions stay in chat-scoped draft
+    end
+
+    opt Authorized durable work — availability watches / recurring monitors
+      H->>T: Start workflow / schedule
+      T->>S: Run or retry scoped activity
+      S->>C: Watch / recheck
+      C-->>S: Signed change callback
+      S-->>T: Persist inbox → signal workflow
+      T-->>H: Resume / deliver durable result
+      H-->>U: Notify actionable change
+    end
+    Note over H,T: Browser actions are not automatically replayed by Temporal

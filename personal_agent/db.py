@@ -66,6 +66,13 @@ class Database:
             CREATE TABLE IF NOT EXISTS events (
                 id INTEGER PRIMARY KEY AUTOINCREMENT, run_id TEXT NOT NULL REFERENCES runs(id),
                 kind TEXT NOT NULL, payload TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS run_followups (
+                run_id TEXT NOT NULL REFERENCES runs(id), message_id INTEGER NOT NULL UNIQUE REFERENCES messages(id),
+                applied_at REAL, PRIMARY KEY(run_id,message_id));
+            CREATE TABLE IF NOT EXISTS travel_plans (
+                user_id TEXT NOT NULL REFERENCES users(id), session_id TEXT NOT NULL REFERENCES sessions(id),
+                source_message_id INTEGER NOT NULL REFERENCES messages(id), version INTEGER NOT NULL,
+                draft TEXT NOT NULL, updated REAL NOT NULL, PRIMARY KEY(user_id,session_id));
             CREATE TABLE IF NOT EXISTS artifacts (
                 id TEXT PRIMARY KEY, user_id TEXT NOT NULL, run_id TEXT NOT NULL REFERENCES runs(id),
                 path TEXT NOT NULL, filename TEXT NOT NULL, media TEXT NOT NULL);

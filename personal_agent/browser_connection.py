@@ -6,6 +6,36 @@ replays an action; the parent still owns the browser, approvals, and journal.
 import asyncio
 
 
+
+
+async def manual_handoff(browser, receive, publish, *, detach=False,refresh_on_release=False):
+    """Wait for user input, optionally releasing the agent attachment.
+
+    Detached sessions reconnect only on release; connected sessions stay idle.
+    No navigation, profile replacement, viewport change or form replay occurs.
+    """
+    target = browser.agent_focus_target_id if detach else None
+    if detach:
+        if not browser.browser_profile.keep_alive:
+            raise RuntimeError('Manual handoff requires an application-owned browser')
+        await browser.stop()
+    publish()
+    reply = await receive()
+    if detach and reply.get('decision') == 'allow':
+        await browser.start()
+        result = await browser.cdp_client.send.Target.getTargets()
+        if not target or not any(t['targetId'] == target and t['type'] == 'page' for t in result['targetInfos']):
+            raise ConnectionError('The manual browser tab has closed; automatic tab substitution is disabled')
+        await browser.get_or_create_cdp_session(target_id=target, focus=True)
+        browser._transport_recovery.last_target = target
+        browser._transport_recovery.invalidate_targets(browser)
+    elif refresh_on_release and reply.get('decision')=='allow':
+        # Visible retains its connection while the agent waits. Discard the
+        # pre-handoff DOM references before continuing from the user's page.
+        browser._transport_recovery.invalidate_targets(browser)
+    return reply
+
+
 class FreshObservationRequired(RuntimeError):
     """The transport recovered, but an old action target must be rediscovered."""
 

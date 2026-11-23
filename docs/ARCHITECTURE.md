@@ -2,6 +2,12 @@
 
 The browser UI sends authenticated requests to FastAPI, which coordinates a per-user agent and SQLite storage.
 
+While a same-chat run is running/resuming, additional messages and draft attachments are saved to `run_followups` and return the existing run ID. A model-boundary yield lets the service append a combined request to the same LangGraph checkpoint, preserving completed tools. The router receives original messages, additions and tool outcomes and classifies outstanding work. Latest corrections take precedence. A finalizer also drains updates arriving during summary persistence. The UI handles `response_reset` when a partial answer is superseded. Stop/New Chat and browser input/approval controls retain their separate behavior; new instructions cannot authorize an older pending action.
+
+Travel requests distinguish exploration, comparison, concrete availability, preparation and execution. Main-agent research handles loose destination/date discovery before strict inventory validation. `personal_agent/travel_planning.py` owns typed, versioned chat drafts in the application database, separating confirmed user constraints from provisional assumptions and sourced options. The service loads that draft each turn; routing decides whether the current message concerns it. Drafts respect account ownership, context floors and source exclusions and never write long-term facts. Preparation reuses existing research, shopping and guarded browser tools.
+
+Travel comparisons enforce `watch_policy=observe_only` through the gateway and task envelope. Workflow starts, schedules and watch registration reject that policy; ordinary concrete availability and explicit monitoring retain their existing behavior. Run events record travel intent, draft updates/errors and response metrics. Clarification-only detection is a heuristic; time to first options measures a saved candidate update rather than browser rendering latency.
+
 Dining and travel use the independent services described in [Dining and Travel Subagents](availability-subagents.md), including the current sequence diagram, ports, webhook contracts, shared-state ownership and user-configured Temporal Schedules (five-minute default, one-minute minimum). The dining-only flow below describes retained compatibility workers for earlier executions; new requests use `delegate_dining`/`delegate_travel`, subagent DeepAgent MCP searches, and signed subagent webhooks.
 
 | Component | Responsibility |
@@ -18,9 +24,13 @@ Dining and travel use the independent services described in [Dining and Travel S
 | `dining_stack.py` | Lifecycle for three Company services, two subagents and persistent local Temporal |
 | `memory_profile.py` | Evidence-based idle consolidation, independent grounding check and version-checked derived profiles |
 | `attachments.py` | Owned file metadata and bounded image input for model calls |
+| `illustrations.py` | Main-agent image generation/editing, independent visual verification, bounded correction and private scene/image storage |
 | `browser_tasks.py` | Worker supervision, approval receipts, duplicate protection and independent verification |
+| `browser_policy.py` | Shared PoC/strict profiles for target-aware actuation, prompts, provider transitions and execution/recovery bounds |
+| `browser_verification.py` | Deterministic evidence for explicit page-opening goals before independent model verification |
 | `browser_use_worker.py` | Isolated Browser Use perception/planning and guarded action execution |
-| `browser_host.py` / `browser_control.py` | Per-user Chromium profiles and temporary manual takeover |
+| `browser_host.py` / `browser_control.py` | Per-user Headless/Visible selection, separate saved profiles, native networking without request interception, and shared streaming/manual control; Visible follows native window dimensions without viewport emulation |
+| `chrome_runtime.py` | Minimal installed-Chrome startup for Visible mode, loopback connection readiness and owned-process shutdown; preserves normal Chrome storage handling |
 | `sources.py` | Source policy, domain constraints, provenance labels and safe link handling |
 | `static/` | Chat rendering, composer attachments, streaming and takeover UI |
 | `tunnel.py` | Optional ngrok lifecycle; public tunnel settings were not changed in maintenance |

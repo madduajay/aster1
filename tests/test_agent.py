@@ -65,7 +65,7 @@ async def test_real_deepagents_context_and_session_digest(database, users, tmp_p
         assert database.one('SELECT status FROM runs WHERE id=?', (run,))['status'] == 'completed'
         assert 'quiet Phoenix hotels' in str(model.seen[0])
         assert 'Which one is downtown?' in str(model.seen[0])
-        assert set(model.offered) <= {'web_search', 'browser_task', 'current_time', 'delegate_dining','delegate_travel','cancel_availability', 'cancel_dining_watch', 'compose_trip','write_todos'}
+        assert set(model.offered) <= {'web_search', 'browser_task', 'current_time', 'delegate_dining','delegate_travel','cancel_availability', 'cancel_dining_watch', 'compose_trip','generate_illustration','write_todos'}
         assert digest.inputs
         assert database.owned_session(uid, sid)['summary'].endswith('User chose a quiet downtown Phoenix hotel.')
         await engine.client.close()

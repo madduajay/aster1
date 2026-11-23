@@ -112,7 +112,7 @@ def grouped_options(results):
     return '\n\n'.join(sections)
 
 
-def compose(db,gateway,user,run,days,hotel_name='',flight_carrier='',dining_estimate=0,activities_estimate=0):
+def compose(db,gateway,user,run,days,hotel_name='',flight_carrier='',dining_estimate=0,activities_estimate=0,*,complete=True):
     owned=db.one('SELECT session_id FROM runs WHERE id=? AND user_id=?',(run,user))
     if not owned:raise LookupError('Run not found')
     groups=run_results(db,run)
@@ -129,7 +129,8 @@ def compose(db,gateway,user,run,days,hotel_name='',flight_carrier='',dining_esti
     start=date.fromisoformat(start);end=date.fromisoformat(end)
     if not 0<=(end-start).days<=30:raise ValueError('Trip must span at most 31 days')
     expected=[(start+timedelta(days=i)).isoformat() for i in range((end-start).days+1)]
-    if [d.get('date') for d in days]!=expected:return {'status':'needs_plan','message':'Provide exactly one ordered day for every date.','dates':expected}
+    required=expected if complete else expected[:len(days)]
+    if not days or [d.get('date') for d in days]!=required:return {'status':'needs_plan','message':'Provide exactly one ordered day for every date, starting at departure.','dates':expected}
     by_url={};actual_urls={};activity_urls=set();entities={};structured=False
     for row in db.rows("SELECT payload FROM events WHERE run_id=? AND kind='research_evidence'",(run,)):
         evidence=json.loads(row['payload'])
@@ -223,7 +224,7 @@ def compose(db,gateway,user,run,days,hotel_name='',flight_carrier='',dining_esti
         if result is None:raise ValueError('Selected option has not been checked')
         return result
     chosen_hotel=pick(hotel,hotel_name,'name');chosen_flight=pick(flights,flight_carrier,'carrier')
-    party=chosen_hotel['criteria']['guests'];count=len(days)
+    party=chosen_hotel['criteria']['guests'];count=len(expected)
     if dining_estimate<0 or activities_estimate<0:raise ValueError('Budget estimates must be positive')
     from .money import budget,convert
     requested=None
@@ -242,14 +243,19 @@ def compose(db,gateway,user,run,days,hotel_name='',flight_carrier='',dining_esti
     except ValueError:return {'status':'needs_rates','message':'Obtain exchange rates before comparing different budget and provider currencies.'}
     total=sum(v for v in costs.values() if v is not None)
     if budget_limit and total>budget_limit:return {'status':'needs_plan','message':'The selection/allocation exceeds the user budget. Keep checked fares and hotel prices unchanged; revise only estimates/selections or explain the budget gap.','costs':costs,'total':total,'limit':budget_limit}
-    result={'status':'completed','meal_plan':meal_plan,'days':validated,'hotels':hotel,'flights':flights,'selected_hotel':chosen_hotel['query_id'],
+    result={'status':'completed' if complete else 'in_progress','meal_plan':meal_plan,'days':validated,'hotels':hotel,'flights':flights,'selected_hotel':chosen_hotel['query_id'],
         'selected_flight':chosen_flight['query_id'],'budget':{'limit':budget_limit,'costs':costs,'total':total,'currency':currency,'exchange':quotes if currency!='USD' else {}}}
-    db.event(run,'trip_plan',result)
-    return {'status':'completed','days':len(days),'budget_total':total,'budget_limit':budget_limit}
+    db.event(run,'trip_plan' if complete else 'trip_plan_progress',result)
+    from .streaming import publish
+    publish(db,user,run,plan=result,complete=complete)
+    return {'status':'completed' if complete else 'in_progress','days':len(days),'budget_total':total,'budget_limit':budget_limit,
+            'next_dates':expected[len(days):]}
 
 
-def render(plan):
-    lines=[grouped_options(plan['hotels']+plan['flights'])]
+def render_sections(plan):
+    sections=[('flights',10,grouped_options(plan['flights'])),
+              ('hotels',20,grouped_options(plan['hotels']))]
+    lines=[]
     budget=plan['budget'];costs=budget['costs']
     from .money import display
     currency=budget['currency'];money=lambda amount:display(amount,currency)
@@ -257,7 +263,7 @@ def render(plan):
     lines.append('Indicative total: '+money(budget['total'])+(' of '+money(budget['limit'])+' budget.' if budget['limit'] else '.'))
     if budget.get('exchange'):lines.append('Converted using [ECB reference rates]('+budget['exchange']['source_url']+') dated '+budget['exchange']['date']+'.')
     if budget['limit'] and budget['total']>budget['limit']:lines.append('This selection exceeds the stated budget; adjust the selections or allocations.')
-    lines+=['','**Day-by-day plan**']
+    if plan.get('status')!='in_progress':sections.append(('budget',1000,'\n\n'.join(line for line in lines if line)))
     for index,day in enumerate(plan['days'],1):
         parts=[]
         if day['transit']!='none':parts.append({'outbound':'Outbound travel','arrival':'Arrival day','return':'Return travel'}[day['transit']])
@@ -269,8 +275,13 @@ def render(plan):
                 match=next((r for r in day['dining'] if r['criteria'].get('meal')==meal),None)
                 meals.append('- **'+meal.title()+':** '+(linked_result(match) if match else 'Outside the destination dining window (flight travel).'))
             entertainment=['- **Entertainment:** '+(' · '.join(parts) if parts else 'Travel day')]
-            lines.append(title+'\n'+'\n'.join(meals+entertainment))
+            body=title+'\n'+'\n'.join(meals+entertainment)
         else:
             parts.extend('Dining: '+linked_result(r) for r in day['dining'])
-            lines.append('- '+title+': '+' · '.join(parts))
-    return '\n\n'.join(line for line in lines if line)
+            body='- '+title+': '+' · '.join(parts)
+        sections.append(('day:'+day['date'],30+index,body))
+    return sorted(sections,key=lambda s:s[1])
+
+
+def render(plan):
+    return '\n\n'.join(body for _,_,body in render_sections(plan))

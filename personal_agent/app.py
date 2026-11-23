@@ -19,6 +19,7 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 from . import config
 from .agent import Engine
 from .browser_host import BrowserHost
+from .browser_intent import browser_preview_run
 from .db import Database, PASSWORDS
 from .service import Service
 from .approvals import approval_text, display_message
@@ -74,9 +75,20 @@ class ManualAction(BaseModel):
     key: str | None = Field(default=None,max_length=32)
 
 
+class BrowserModeSelection(BaseModel):
+    mode: str = Field(pattern='^(headless|visible)$')
+
+
 class MemoryCorrection(BaseModel):
     text: str = Field(min_length=1, max_length=600)
     session_id: str
+
+
+def browser_panel_closed(database,run_id):
+    event=database.one("SELECT e.payload,r.status,r.approval_id FROM events e JOIN runs r ON r.id=e.run_id WHERE e.run_id=? AND e.kind='browser_panel' ORDER BY e.id DESC LIMIT 1",(run_id,))
+    if not event or event['status'] not in {'input','completed'}:return False
+    state=json.loads(event['payload'])
+    return state.get('visible') is False and (event['status']=='completed' or state.get('input_id')==event['approval_id'])
 
 
 def create_app(database=None, service=None):
@@ -203,6 +215,16 @@ def create_app(database=None, service=None):
     def me(row=Depends(identity)):
         return {'username': row['username'], 'must_change': bool(row['must_change'])}
 
+    @app.get('/api/browser/mode')
+    async def browser_mode_selection(request:Request,uid=Depends(user)):
+        return request.app.state.service.engine.browsers.mode_info(uid)
+
+    @app.post('/api/browser/mode')
+    async def select_browser_mode(body:BrowserModeSelection,request:Request,uid=Depends(user)):
+        service=request.app.state.service
+        async with service.user_lock(uid):
+            return await service.engine.browsers.set_mode(uid,body.mode)
+
     @app.post('/api/password')
     async def password(body: PasswordChange, request: Request, response: Response, row=Depends(identity)):
         try:
@@ -299,6 +321,7 @@ def create_app(database=None, service=None):
             if active['status']=='input' and active['approval']:
                 pending=json.loads(active['approval'])
                 active['input']=pending['action']
+                active['browser_returned']=browser_panel_closed(db(request),active['id'])
                 active['input_text']=input_text(pending['action'])
                 event=db(request).one("SELECT payload FROM events WHERE run_id=? AND kind='input' ORDER BY id DESC LIMIT 1",(active['id'],))
                 active['input_message_id']=json.loads(event['payload']).get('message_id') if event else None
@@ -310,11 +333,10 @@ def create_app(database=None, service=None):
                     previous=next((m for m in reversed(messages) if m['role']=='assistant' and m['content'].startswith(('Approval required:\n','Approval needed\n'))),None)
                     if previous:active['approval_message_id']=previous['id']
         for item in messages:item['content']=display_message(item['role'],item['content'])
-        browser_run=None
-        if db(request).one("SELECT name FROM sqlite_master WHERE name='browser_use_tasks'"):
-            browser_run=db(request).one('SELECT t.run_id FROM browser_use_tasks t JOIN runs r ON r.id=t.run_id WHERE t.user_id=? AND r.session_id=? ORDER BY t.created DESC LIMIT 1',(uid,sid))
+        browser_run=browser_preview_run(db(request),uid,sid)
         return {'session': row, 'messages': messages,
-                'active_run': active,'browser_run':browser_run['run_id'] if browser_run else None}
+                'active_run': active,'browser_run':browser_run,
+                'browser_returned':bool(browser_run and browser_panel_closed(db(request),browser_run))}
 
     @app.post('/api/runs')
     async def run(body: Turn, request: Request, uid=Depends(user)):
@@ -330,7 +352,9 @@ def create_app(database=None, service=None):
 
     @app.post('/api/runs/{rid}/cancel')
     async def cancel(rid: str, request: Request, uid=Depends(user)):
-        await request.app.state.service.cancel(uid, rid)
+        try:await request.app.state.service.cancel(uid, rid)
+        except LookupError:raise HTTPException(404,'Run not found') from None
+        except ValueError as exc:raise HTTPException(409,str(exc)) from None
         return {'ok': True}
 
     @app.get('/api/runs/{rid}/diagnostics')
@@ -341,16 +365,55 @@ def create_app(database=None, service=None):
     @app.get('/api/runs/{rid}/browser')
     def browser_view(rid: str,request: Request,uid=Depends(user)):
         if not db(request).one('SELECT id FROM runs WHERE id=? AND user_id=?',(rid,uid)):raise HTTPException(404)
+        if db(request).one("SELECT id FROM events WHERE run_id=? AND kind='browser_context_retired' LIMIT 1",(rid,)):
+            return {'available':False,'live':False,'can_take_control':False,'returned':True}
         host=request.app.state.service.engine.browsers
-        return host.view_info(uid,rid) if hasattr(host,'view_info') else {'available':False}
+        result=host.view_info(uid,rid) if hasattr(host,'view_info') else {'available':False}
+        result['returned']=browser_panel_closed(db(request),rid)
+        if db(request).one("SELECT name FROM sqlite_master WHERE type='table' AND name='browser_use_tasks'"):
+            task=db(request).one("SELECT t.result FROM browser_use_tasks t JOIN runs r ON r.id=t.run_id WHERE t.run_id=? AND t.user_id=? AND t.status='completed' AND r.status='completed' ORDER BY t.created DESC LIMIT 1",(rid,uid))
+            if task:
+                saved=json.loads(task['result'] or '{}')
+                result['can_take_control']=bool(result.get('url') or saved.get('url'))
+                if not result.get('url'):result.update(url=saved.get('url',''),title=saved.get('title',''))
+        return result
+
+    @app.post('/api/runs/{rid}/browser/take-control')
+    async def take_browser_control(rid:str,request:Request,uid=Depends(user)):
+        try:return await request.app.state.service.take_browser_control(uid,rid)
+        except LookupError:raise HTTPException(404,'Browser task not found') from None
+        except ValueError as exc:raise HTTPException(409,str(exc)) from None
+
+    @app.post('/api/runs/{rid}/browser/return')
+    async def return_to_chat(rid:str,body:InputReply,request:Request,uid=Depends(user)):
+        try:return await request.app.state.service.return_to_chat(uid,rid,body.input_id)
+        except LookupError:raise HTTPException(404,'Pending browser input not found') from None
 
     @app.get('/api/runs/{rid}/browser/frame')
     async def browser_frame(rid: str,request: Request,uid=Depends(user)):
         if not db(request).one('SELECT id FROM runs WHERE id=? AND user_id=?',(rid,uid)):raise HTTPException(404)
+        if db(request).one("SELECT id FROM events WHERE run_id=? AND kind='browser_context_retired' LIMIT 1",(rid,)):return Response(status_code=204)
         host=request.app.state.service.engine.browsers
         frame=await host.preview(uid,rid) if hasattr(host,'preview') else None
         if not frame:return Response(status_code=204)
         return Response(frame,media_type='image/jpeg')
+
+    @app.get('/api/runs/{rid}/browser/diagnostics')
+    async def browser_diagnostics(rid:str,request:Request,input_id:str='',uid=Depends(user)):
+        run=db(request).one('SELECT status FROM runs WHERE id=? AND user_id=?',(rid,uid))
+        if not run:raise HTTPException(404)
+        result={'frames':[],'live':False}
+        if run['status']=='input':
+            try:result=await request.app.state.service.engine.browsers.login_diagnostics(uid,rid,input_id)
+            except LookupError:raise HTTPException(404,'Pending browser input not found') from None
+            result['live']=True
+        rows=db(request).rows("SELECT payload FROM events WHERE run_id=? AND kind='browser_network' ORDER BY id DESC LIMIT 100",(rid,))
+        network=[json.loads(row['payload']) for row in reversed(rows)]
+        if network:result['network']=network
+        else:result.setdefault('network',[])
+        failed=sorted({e['host'] for e in result['network'] if e['kind'] in {'failed','blocked'}})
+        post_statuses=sorted({(e['host'],e['status']) for e in result['network'] if e['kind']=='response' and e['method']=='POST'})
+        return {'network_summary':{'failed_hosts':failed,'post_statuses':[{'host':host,'status':status} for host,status in post_statuses]},**result}
 
     @app.websocket('/api/runs/{rid}/browser/control')
     async def browser_control(socket: WebSocket,rid: str,input_id: str='',width: int=1280,height: int=850):
@@ -389,7 +452,10 @@ def create_app(database=None, service=None):
     async def manual_action(rid: str,body: ManualAction,request: Request,uid=Depends(user)):
         if not db(request).one('SELECT id FROM runs WHERE id=? AND user_id=?',(rid,uid)):raise HTTPException(404)
         host=request.app.state.service.engine.browsers
-        if body.operation=='open':return await host.open_takeover(uid,rid,body.input_id)
+        if body.operation=='open':
+            result=await host.open_takeover(uid,rid,body.input_id)
+            db(request).event(rid,'browser_panel',{'input_id':body.input_id,'visible':True})
+            return result
         from playwright.async_api import Error as BrowserError
         try:return await host.manual_action(uid,rid,body.input_id,body.operation,body.x,body.y,body.text,body.key)
         except BrowserError:raise ValueError('The website changed or disconnected. Inspect the browser before continuing.') from None
@@ -420,11 +486,15 @@ def create_app(database=None, service=None):
                 batch = db(request).rows("SELECT * FROM events WHERE run_id=? AND id>? ORDER BY id LIMIT 100", (rid, cursor))
                 for event in batch:
                     cursor = event['id']
-                    if event['kind'] not in {'token','progress','diagnostic','answer','artifact','approval','input','done','sources'}:continue
+                    if event['kind'] not in {'token','progress','diagnostic','answer','artifact','approval','input','done','sources','trip_section','response_reset'}:continue
                     if event['kind']=='diagnostic':event['payload']=json.dumps({'text':'A website step needs attention.'})
                     elif event['kind'] in {'answer','token'}:
                         from .public_errors import customer_text
                         event['payload']=json.dumps(customer_text(json.loads(event['payload'])))
+                    elif event['kind']=='trip_section':
+                        from .public_errors import customer_text
+                        section=json.loads(event['payload']);section['text']=customer_text(section['text'])
+                        event['payload']=json.dumps(section)
                     yield f"id: {cursor}\nevent: {event['kind']}\ndata: {event['payload']}\n\n"
                 state = db(request).one("SELECT status FROM runs WHERE id=?", (rid,))['status']
                 if state not in {'running', 'resuming'} and len(batch) < 100:
@@ -479,8 +549,9 @@ def create_app(database=None, service=None):
     async def upload(request: Request, session_id: str, draft: bool = False, uid=Depends(user)):
         database = db(request)
         database.owned_session(uid, session_id)
-        if request.app.state.service.active(uid):
-            raise HTTPException(409, 'Stop the active run before uploading a file')
+        active=request.app.state.service.active(uid)
+        if active and not (draft and active['session_id']==session_id and active['status'] in {'running','resuming'}):
+            raise HTTPException(409, 'Files can join a running task in this chat; finish the current browser pause before uploading')
         raw = request.headers.get('x-filename','Document')
         from urllib.parse import unquote
         filename = Path(unquote(raw)).name.replace('\\','_')[:180]

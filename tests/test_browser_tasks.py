@@ -1,6 +1,7 @@
 import asyncio
 import json
 import secrets
+import time
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -16,6 +17,7 @@ from personal_agent.memory import Memory
 from personal_agent.service import Service
 from conftest import SummaryModel
 from test_agent import ScriptedModel, wait_service
+from personal_agent.browser_intent import native_entry_url,browser_preview_run
 
 
 class StubBrowserHost:
@@ -23,6 +25,8 @@ class StubBrowserHost:
         self.locks={};self.contexts={};self.dialogs={}
     close_user=AsyncMock()
     def set_scope(self,*args):pass
+
+
 
 
 def task_row(db,user,run='browser-run',tid='browser-task'):
@@ -45,6 +49,26 @@ async def prepare(manager,tid='browser-task',seq=1,control='Place order'):
     return manager.db.one('SELECT * FROM browser_use_actions WHERE task_id=? AND seq=?',(tid,seq))
 
 
+def test_native_entry_uses_scoped_observed_login_for_account_queries_without_session_parameters(boundary,users):
+    manager,user=boundary;db=manager.db
+    run=db.one("SELECT session_id FROM runs WHERE id='browser-run'")
+    db.message(user,run['session_id'],'user','Show my account balance')
+    db.execute("UPDATE runs SET created=? WHERE id='browser-run'",(time.time()+1,))
+    state={'url':'https://example.com/en/account/login?tracking=private-session','fields':[{'type':'password'}]}
+    db.execute("INSERT INTO browser_use_actions(id,task_id,seq,operation,category,status,description,fingerprint,duplicate_key,before_state) VALUES('entry','browser-task',1,'request_user','input','answered','{}','fixture','fixture',?)",(json.dumps(state),))
+    assert native_entry_url(db,user,'browser-run','Start at https://example.com',['example.com'])=='https://example.com/en/account/login'
+    assert native_entry_url(db,user,'browser-run','',['unrelated.example']) is None
+    assert native_entry_url(db,users[1]['id'],'browser-run','',['example.com']) is None
+    db.message(user,run['session_id'],'user','Open https://example.com/help for my account')
+    assert native_entry_url(db,user,'browser-run','',['example.com'])=='https://example.com/help'
+
+
+def test_native_entry_does_not_put_query_tokens_or_mutating_urls_in_chrome_arguments(boundary):
+    manager,user=boundary
+    for url in ['https://example.com/login?token=private','https://example.com/logout','https://user:private@example.com/login']:
+        assert native_entry_url(manager.db,user,'browser-run',url,['example.com']) is None
+
+
 @pytest.fixture
 def boundary(database,users,monkeypatch):
     monkeypatch.setattr(module,'public_url',AsyncMock())
@@ -56,6 +80,54 @@ def boundary(database,users,monkeypatch):
     return manager,user
 
 
+@pytest.mark.parametrize('destination,expected',[
+    ('https://example.com/benefits','allow'),
+    ('https://unrelated.example/benefits','deny'),
+    ('http://127.0.0.1/private','deny'),
+    ('','deny'),
+])
+async def test_switch_validates_destination_instead_of_previous_task_site(boundary,destination,expected):
+    manager,user=boundary
+    state={'url':'https://previous-task.example/login','target_id':'old-tab',
+           'switch_target':{'target_id':'new-tab','url':destination}}
+    params={'tab_id':'new-tab'}
+    await manager.before('browser-task',{'seq':1,'operation':'switch','params':params,'observed':state,
+        'fingerprint':action_binding('switch',params,state)})
+    assert manager.send.call_args.args[1]['decision']==expected
+    changed={**state,'switch_target':{'target_id':'new-tab','url':'https://example.com/changed'}}
+    assert action_binding('switch',params,state)!=action_binding('switch',params,changed)
+
+
+def test_preview_survives_related_chain_but_not_topic_change_or_other_scope(boundary,users):
+    manager,user=boundary;db=manager.db
+    sid=db.one("SELECT session_id FROM runs WHERE id='browser-run'")['session_id']
+    db.message(user,sid,'user','Open the card benefits page')
+    db.execute('UPDATE messages SET created=1 WHERE session_id=?',(sid,))
+    db.execute("UPDATE runs SET created=2,status='completed' WHERE id='browser-run'")
+    db.execute("UPDATE browser_use_tasks SET status='completed',objective='Open the card benefits page' WHERE id='browser-task'")
+    def follow(rid,text,stamp):
+        mid=db.message(user,sid,'user',text);db.execute('UPDATE messages SET created=? WHERE id=?',(stamp,mid))
+        db.execute("INSERT INTO runs(id,user_id,session_id,status,created) VALUES(?,?,?,'completed',?)",(rid,user,sid,stamp+.1))
+    follow('follow1','show me all card benefits',3)
+    assert browser_preview_run(db,user,sid)=='browser-run'
+    follow('follow2','tell me more',4)
+    assert browser_preview_run(db,user,sid)=='browser-run'
+    assert browser_preview_run(db,users[1]['id'],sid) is None
+    assert browser_preview_run(db,user,db.new_session(user)) is None
+    follow('different','hello',5)
+    assert browser_preview_run(db,user,sid) is None
+    follow('later','show me all card benefits',6)
+    assert browser_preview_run(db,user,sid) is None  # A topic break is not silently undone.
+
+
+def test_cancelled_browser_task_does_not_reappear_on_followup(boundary):
+    manager,user=boundary;db=manager.db
+    sid=db.one("SELECT session_id FROM runs WHERE id='browser-run'")['session_id']
+    db.execute("UPDATE runs SET status='cancelled' WHERE id='browser-run'")
+    db.execute("INSERT INTO runs(id,user_id,session_id,status,created) VALUES('follow',?,?,'completed',1)",(user,sid))
+    assert browser_preview_run(db,user,sid) is None
+
+
 def test_policy_blocks_host_tools_private_fields_and_readonly_mutations():
     assert classify_action('evaluate',{'code':'anything'},observed())[0]=='blocked'
     assert classify_action('write_file',{},observed())[0]=='blocked'
@@ -64,11 +136,20 @@ def test_policy_blocks_host_tools_private_fields_and_readonly_mutations():
     assert classify_action('click',{},observed(),inspect_only=True)[0]=='blocked'
     assert classify_action('click',{},observed())[0]=='approval'
     assert classify_action('navigate',{'url':'https://example.com/cart/add'},observed())[0]=='approval'
+
+
+async def test_chromium_error_page_does_not_report_a_domain_scope_denial(boundary):
+    manager,user=boundary;state=observed();state['url']='chrome-error://chromewebdata/'
+    await manager.before('browser-task',{'seq':1,'operation':'wait','params':{},'observed':state,'fingerprint':action_binding('wait',{},state)})
+    row=manager.db.one('SELECT description FROM browser_use_actions WHERE task_id=? AND seq=1',('browser-task',))
+    description=json.loads(row['description'])
+    assert 'navigation failed' in description['blocked_reason']
+    assert 'outside the approved' not in description['blocked_reason']
     assert classify_action('find_elements',{'attributes':['value']},observed())[0]=='blocked'
     assert classify_action('click_selector',{'selector':'button'},observed())[0]=='approval'
     radio=observed('10.0');radio['node'].update(role='radio',tag='LABEL')
     assert classify_action('click_selector',{'selector':'label[for=s10]'},radio)[0]=='preparation'
-    assert classify_action('click_selector',{'selector':'label[for=s10]'},radio,inspect_only=True)[0]=='blocked'
+    assert classify_action('click_selector',{'selector':'label[for=s10]'},radio,inspect_only=True)[0]=='preparation'
 
 
 def test_inspection_keeps_public_metadata_and_omits_private_attributes():
@@ -99,7 +180,7 @@ def test_reservation_entry_links_and_dialogs_are_routine_navigation(label):
     state['node'].update(tag='BUTTON',type='button',role='button',href='',has_popup='dialog')
     assert classify_action('click',{},state)[0]=='read'
     state['node']['form']={'method':'post','sensitive':False}
-    assert classify_action('click',{},state)[0]=='approval'
+    assert classify_action('click',{},state)[0]==('preparation' if label=='Reservations' else 'approval')
 
 
 def test_reservation_entry_exemption_does_not_cover_submit_or_checkout():
@@ -213,10 +294,75 @@ async def test_verifier_cannot_accept_ungrounded_evidence(boundary):
     assert result['status']=='unverified' and not result['verification']['success']
 
 
-async def test_provider_approval_expands_actions_but_not_citations(boundary):
+async def test_read_and_summarize_verifies_browser_evidence_before_chat_delivery(boundary):
+    manager,user=boundary
+    manager.db.execute("UPDATE browser_use_tasks SET objective='Open the benefits page and summarize it' WHERE id='browser-task'")
+    report='Eligible cards earn points and include travel protection.'
+    class Model:
+        def with_structured_output(self,*args):return self
+        async def ainvoke(self,messages):
+            assert 'BEFORE the main agent sends its final chat response' in messages[0].content
+            data=json.loads(messages[1].content)
+            assert 'candidate_report' not in data  # Draft prose is not source evidence.
+            assert not data['actions']  # No chat-delivery or website submission is required.
+            assert data['numbered_evidence']['0']=='Card benefits: Eligible cards earn points and include travel protection.'
+            return GoalCheck(success=True,reason='The requested benefits are visible and support the summary.',evidence_ids=[0])
+    manager.model=Model()
+    result=await manager.finish('browser-task',{'observed':{'url':'https://example.com/benefits','text':'Card benefits: '+report},'result':report,'reported_success':True})
+    assert result['status']=='verified' and result['verification']['success']
+
+
+async def test_read_verifier_uses_user_goal_not_expanded_navigation_hints(boundary):
+    manager,user=boundary;db=manager.db
+    sid=db.one("SELECT session_id FROM runs WHERE id='browser-run'")['session_id']
+    mid=db.message(user,sid,'user','Compare Alpha and Beta warranties')
+    db.execute('UPDATE messages SET created=1 WHERE id=?',(mid,))
+    db.execute("UPDATE runs SET created=2 WHERE id='browser-run'")
+    db.execute("UPDATE browser_use_tasks SET inspect_only=1,objective='Read warranty pages. Optional links include application, footer and comparison pages.' WHERE id='browser-task'")
+    class Model:
+        def with_structured_output(self,*args):return self
+        async def ainvoke(self,messages):
+            data=json.loads(messages[1].content)
+            assert data['task']=='Compare Alpha and Beta warranties'
+            assert 'optional discovery hints' in messages[0].content
+            assert all('task' not in a['details'] for a in data['actions'])
+            return GoalCheck(success=True,reason='Both warranties were observed; optional links are not required.',evidence_ids=[0])
+    manager.model=Model()
+    result=await manager.finish('browser-task',{'observed':{'url':'https://example.com/warranties','text':'Alpha: three years. Beta: five years.','links':['https://example.com/warranty/compare']}})
+    assert result['status']=='verified' and not result['browser_followup']['links']
+
+
+@pytest.mark.parametrize('url,decision',[('https://example.com/details','allow'),('https://other.example/details','deny')])
+async def test_direct_page_reads_keep_the_existing_domain_boundary(boundary,url,decision):
+    manager,user=boundary;state={'url':url,'text':'Observed details'};params={}
+    await manager.before('browser-task',{'seq':1,'operation':'read_page','params':params,'observed':state,
+        'fingerprint':action_binding('read_page',params,state)})
+    assert manager.send.call_args.args[1]['decision']==decision
+
+
+async def test_shopping_listing_does_not_count_as_product_detail_evidence(boundary):
+    manager,user=boundary;db=manager.db
+    db.execute("UPDATE browser_use_tasks SET inspect_only=1 WHERE id='browser-task'")
+    db.event('browser-run','shopping_browser',{'requested_count':2})
+    class Model:
+        def with_structured_output(self,*args):return self
+        async def ainvoke(self,messages):
+            data=json.loads(messages[1].content)
+            assert data['shopping_requirements']['requested_count']==2
+            assert data['shopping_requirements']['observed_product_pages']==[]
+            return GoalCheck(success=True,reason='Listings visible',evidence_ids=[0])
+    manager.model=Model()
+    result=await manager.finish('browser-task',{'observed':{'url':'https://example.com/c/white-shirts','text':'White shirts: Alpha and Beta.',
+        'links':['https://example.com/p/12345','https://example.com/p/67890']}})
+    assert result['status']=='unverified'
+    assert result['browser_followup']['links']==['https://example.com/p/12345','https://example.com/p/67890']
+
+
+async def test_provider_approval_expands_actions_but_not_citations(boundary,monkeypatch):
+    monkeypatch.setenv('PERSONAL_AGENT_BROWSER_POLICY','strict')
     manager,user=boundary
     manager.browsers.blocked_destinations={};manager.browsers.scopes={}
-    manager.db.execute('CREATE TABLE browser_delegations(user_id TEXT,run_id TEXT,domain TEXT,UNIQUE(user_id,run_id,domain))')
+    manager.db.execute('CREATE TABLE IF NOT EXISTS browser_delegations(user_id TEXT,run_id TEXT,domain TEXT,UNIQUE(user_id,run_id,domain))')
     state=observed();state['links']=['https://provider.example/login']
     params={'url':'https://provider.example/login'}
     event={'seq':1,'operation':'request_domain','params':params,'observed':state,'fingerprint':action_binding('request_domain',params,state)}

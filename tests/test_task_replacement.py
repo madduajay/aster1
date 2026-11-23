@@ -1,4 +1,4 @@
-"""Replacement retires the old graph/worker before a new run can acquire a profile."""
+"""Running same-chat prompts merge; explicit replacement retires paused workers."""
 import asyncio
 import json
 from types import SimpleNamespace
@@ -33,11 +33,17 @@ def setup_service(db, uid, status='input', kind='manual'):
 
 
 @pytest.mark.parametrize('status',['running','resuming','approval','input'])
-async def test_new_prompt_cancels_every_active_state_and_revokes_old_controls(database,users,status):
+async def test_running_prompts_merge_while_paused_replacement_revokes_controls(database,users,status):
     uid=users[0]['id'];service,sid=setup_service(database,uid,status)
     try:
         result=await service.submit(uid,sid,'Find a different restaurant')
         old=database.one("SELECT * FROM runs WHERE id='old'")
+        if status in {'running','resuming'}:
+            assert result['run_id']=='old' and result['merged']
+            assert old['status']==status
+            assert database.one("SELECT message_id FROM run_followups WHERE run_id='old' AND applied_at IS NULL")
+            service.engine.browser_tasks.cancel_run.assert_not_awaited()
+            return
         assert old['status']=='cancelled' and old['approval_id'] is None and old['approval'] is None
         assert service.active(uid)['id']==result['run_id']
         service.engine.browser_tasks.cancel_run.assert_awaited_once_with(uid,'old')
@@ -82,10 +88,10 @@ async def test_cancel_before_execute_starts_and_concurrent_submissions(database,
     service.tasks['old']=asyncio.create_task(service.execute(uid,sid,'old'))
     try:
         a,b=await asyncio.gather(service.submit(uid,sid,'First replacement'),service.submit(uid,sid,'Second replacement'))
-        assert database.one("SELECT status FROM runs WHERE id='old'")['status']=='cancelled'
-        assert database.one('SELECT status FROM runs WHERE id=?',(a['run_id'],))['status']=='cancelled'
-        assert service.active(uid)['id']==b['run_id']
-        assert [c.args[1] for c in service.engine.browser_tasks.cancel_run.await_args_list]==['old',a['run_id']]
+        assert a['run_id']==b['run_id']=='old'
+        assert database.one("SELECT status FROM runs WHERE id='old'")['status']=='running'
+        assert len(database.rows("SELECT * FROM run_followups WHERE run_id='old'"))==2
+        service.engine.browser_tasks.cancel_run.assert_not_awaited()
     finally:await service.close()
 
 

@@ -18,8 +18,8 @@ const scope=roots.length?roots:[document.body];
 const text=clean(scope.map(e=>e?.innerText||'').join(' ')).slice(0,18000);
 const fields=Array.from(document.querySelectorAll('input,textarea,select')).filter(visible).map(e=>({
 tag:e.tagName,type:e.type||'',autocomplete:e.autocomplete||'',name:clean(e.getAttribute('aria-label')||Array.from(e.labels||[]).map(l=>l.innerText).join(' ')||e.placeholder||e.name).slice(0,160),
-required:!!e.required||e.getAttribute('aria-required')==='true',empty:!e.value,valid:(!e.validity||e.validity.valid)&&e.getAttribute('aria-invalid')!=='true',sensitive:e.matches('input[type=password],input[autocomplete^="cc-"],input[autocomplete="one-time-code"]')||/password|passcode|verification.?code|one.?time|\botp\b|\bcvv\b|\bcvc\b|card.?number/i.test([e.name,e.autocomplete,e.getAttribute('aria-label'),...Array.from(e.labels||[]).map(l=>l.innerText)].join(' '))})).slice(0,40);
-const human=/(?:verify|confirm)\s+(?:that\s+)?you(?:\s+are|['’]re)\s+(?:a\s+)?human|complete the captcha|checking your browser|press\s*(?:&|and)\s*hold.{0,80}\b(?:human|bot)\b/i.test(text)||Array.from(document.querySelectorAll('iframe[src*="recaptcha"],iframe[src*="hcaptcha"]')).some(visible);
+required:!!e.required||e.getAttribute('aria-required')==='true',empty:!e.value,valid:(!e.validity||e.validity.valid)&&e.getAttribute('aria-invalid')!=='true',blocking:e.matches(':user-invalid')||e.getAttribute('aria-invalid')==='true',sensitive:e.matches('input[type=password],input[autocomplete^="cc-"],input[autocomplete="one-time-code"]')||/password|passcode|verification.?code|one.?time|\botp\b|\bcvv\b|\bcvc\b|card.?number/i.test([e.name,e.autocomplete,e.getAttribute('aria-label'),...Array.from(e.labels||[]).map(l=>l.innerText)].join(' '))})).slice(0,40);
+const human=/(?:verify|confirm)\s+(?:that\s+)?you(?:\s+are|['’]re)\s+(?:a\s+)?human|complete the captcha|checking your browser|press\s*(?:&|and)\s*hold.{0,80}\b(?:human|bot)\b/i.test(text)||Array.from(document.querySelectorAll('iframe[src*="recaptcha"],iframe[src*="hcaptcha"]')).some(e=>{const r=e.getBoundingClientRect();return visible(e)&&r.width>150&&r.height>120&&/challenge|bframe/i.test(e.src+' '+e.title)});
 return {url:location.href,title:document.title,text,dialog:!!dialogs.length,fields,
 headings:Array.from(document.querySelectorAll('h1,h2')).filter(visible).slice(0,10).map(e=>clean(e.innerText)),
 selections:Array.from(document.querySelectorAll('input:checked,select,[aria-selected=true],[aria-checked=true],[aria-pressed=true],label[for]')).filter(e=>visible(e)&&(e.tagName!=='LABEL'||e.control?.checked)).map(e=>({name:e.getAttribute('aria-label')||e.name||clean(e.innerText).slice(0,150),value:e.control?.value||e.value||'',checked:e.control?.checked??e.checked??null})).slice(0,40),
@@ -29,14 +29,41 @@ manual_required:human||fields.some(f=>f.sensitive),human_required:human};
 })()"""
 
 
-def input_need(observed):
+def input_need(observed,*,navigation_only=False,completion=False):
     """Only observed controls trigger an automatic handoff, never an agent claim."""
     fields=observed.get('fields',[])
-    if observed.get('manual_required'):
-        return {'kind':'manual','prompt':'The website needs you to complete login or human verification. Use the browser below, then choose Continue. Enter passwords and verification codes there, not in chat.'}
-    if any(f.get('empty') and (f.get('type')=='tel' or re.search(r'phone|mobile',f.get('name',''),re.I)) for f in fields):
-        return {'kind':'information','prompt':'What phone number should I use on this website? Include the country code. I will ask for approval before requesting a verification message.'}
+    private_blocker=any(f.get('sensitive') and f.get('blocking') for f in fields)
+    if observed.get('human_required') or observed.get('manual_required') and not navigation_only and (not completion or private_blocker):
+        return {'kind':'manual','prompt':'The website needs you to complete login or human verification. Use the browser below, then choose Release control. Enter passwords and verification codes there, not in chat.'}
+    if navigation_only:return None
+    if any(f.get('empty') and f.get('required',True) and (not completion or f.get('blocking',True)) and (f.get('type')=='tel' or re.search(r'phone|mobile',f.get('name',''),re.I)) for f in fields):
+        return {'kind':'information','prompt':'The form needs a phone number to continue. You can enter it directly in the browser panel.'}
     return None
+
+
+def repair_navigation_pauses(db):
+    """Repair the known automatic phone prompt without advancing a website."""
+    from .browser_intent import navigation_only_run
+    legacy='What phone number should I use on this website? Include the country code. I will ask for approval before requesting a verification message.'
+    repaired=0
+    for run in db.rows("SELECT * FROM runs WHERE status='input'"):
+        pending=json.loads(run['approval'] or '{}');action=pending.get('action',{})
+        if action.get('prompt')!=legacy or not navigation_only_run(db,run['user_id'],run['id']):continue
+        action.update(kind='manual',purpose='page_opened',prompt='The requested page is open. You can fill out the form directly in the browser panel or open its website link. Choose Continue to finish this page-opening task. No personal details are needed in chat.')
+        text=input_text(action)
+        with db.connect() as conn:
+            conn.execute("UPDATE runs SET approval=? WHERE id=? AND status='input'",(json.dumps(pending),run['id']))
+            if db.one("SELECT name FROM sqlite_master WHERE type='table' AND name='browser_use_actions'"):
+                conn.execute("UPDATE browser_use_actions SET description=? WHERE id=? AND task_id=? AND status='proposed'",(json.dumps(action),action.get('action_id'),action.get('task_id')))
+            event=db.one("SELECT id,payload FROM events WHERE run_id=? AND kind='input' ORDER BY id DESC LIMIT 1",(run['id'],))
+            if event:
+                payload=json.loads(event['payload'])
+                if payload.get('id')==run['approval_id']:
+                    conn.execute("UPDATE messages SET content=? WHERE id=? AND session_id=? AND role='assistant' AND content LIKE ?",(text,payload.get('message_id'),run['session_id'],legacy+'%'))
+                    payload['text']=text;conn.execute('UPDATE events SET payload=? WHERE id=?',(json.dumps(payload),event['id']))
+        db.event(run['id'],'navigation_pause_repaired',{'reason':'Opening a page does not require phone input.'})
+        repaired+=1
+    return repaired
 
 
 def combine_observations(page,frames):
@@ -71,4 +98,4 @@ class RecoveryBudget:
 
 
 def input_text(action):
-    return action.get('prompt','More information is needed to continue.')+ ('\nEnter it in the browser panel and choose Continue, or reply here. Type /stop to cancel.' if action.get('kind')!='manual' else '')
+    return action.get('prompt','More information is needed to continue.')+ ('\nEnter it in the browser panel and choose Release control, or reply here. Type /stop to cancel.' if action.get('kind')!='manual' else '')
