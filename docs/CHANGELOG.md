@@ -2,6 +2,8 @@
 
 ## 2026-11-23
 
+- Trip-linked dining requests now override an incorrect preparation classification and directly invoke Dining. They inherit scoped trip/stay dates, destination, party size and requested meals, including legacy hotel-only trip records, without repeating Travel checks or composing an unrequested itinerary. Booking, gear and etiquette requests retain their own routing.
+
 - Display automatically chosen windows as "Proposed travel dates" with the actual dates. Remove the "Not selected yet" placeholder from exploration responses without a sourced window.
 
 - Undated trip checks now research a suitable seasonal window and adopt it provisionally without asking for dates or confirmation. Flights and hotels inherit the same window before provider validation; the response discloses the exact proposed dates. Working dates persist in the chat draft and are cleared by explicit destination/date/duration corrections rather than becoming permanent preferences. Known dates remain authoritative.

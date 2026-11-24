@@ -6,14 +6,26 @@ from datetime import date,datetime,timedelta
 MEALS={'breakfast':('08:00','08:30'),'lunch':('12:30','13:00'),'dinner':('19:00','19:30')}
 
 
+def trip_dining_request(text):
+    """Dining recommendations attached to a trip are domain work, not preparation."""
+    dining=re.search(r'\b(?:dining|restaurants?|breakfast|lunch|dinner|meals?|places to eat)\b',text,re.I)
+    trip=re.search(r'\b(?:trip|travel|stay|itinerary|vacation|holiday)\b|\b(?:those|these|same)\s+(?:days|dates)\b',text,re.I)
+    request=re.search(r'\b(?:show|find|suggest|recommend|add|include|options|recommendations)\b',text,re.I)
+    other=re.search(r'\b(?:book|reserve|cancel|stop|etiquette|gear|utensils|recipes|forms|documents)\b|dress code|\b(?:plan|build|create|organize|arrange)\b.*\b(?:trip|itinerary)\b',text,re.I)
+    return bool(dining and trip and request and not other)
+
+
 def dining_followup(db,store,user,run,text,queries):
     """Resolve a range reference from scoped travel records, not a single date."""
     refers=re.search(r'\b(?:between|during|for|on|over)\s+(?:those|these|the same)\s+(?:days|dates)\b|\b(?:throughout|during|for)\s+(?:my |the |our )?(?:trip|stay)\b|\b(?:every|each)\s+day\b|\b(?:whole|entire)\s+(?:trip|stay)\b',text,re.I)
     refers=refers or re.search(r'\b(?:also|add|include|combine)\b.*\b(?:dining|restaurants?|venues?|breakfast|lunch|dinner)\b',text,re.I)
-    if not refers:return {}
+    if not refers and not trip_dining_request(text):return {}
     owned=db.one('SELECT session_id FROM runs WHERE id=? AND user_id=?',(run,user))
     if not owned:return {}
     floor=db.owned_session(user,owned['session_id'])['context_floor']
+    from personal_agent.travel_planning import TravelPlans
+    draft=TravelPlans(db).load(user,owned['session_id'])
+    if draft:floor=max(floor,draft['created_message_id']-1)
     supplied={q.get('criteria',{}).get('location') for q in queries if q.get('criteria',{}).get('location')}
     from .contracts import canonical,leaves
     from .routes import location

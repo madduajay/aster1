@@ -543,6 +543,23 @@ class Engine:
                         'trip_start':specific['start'],'trip_end':specific['end'],'trip_destination':specific['destination'],
                         'trip_party_size':next(iter(counts)) if len(counts)==1 else decision.trip_party_size or 2,
                         'requires_research':True})
+                from availability.trips import trip_dining_request,dining_followup
+                gateway=getattr(self,'availability',None)
+                if gateway and trip_dining_request(request_text) and not decision.new_travel_plan and not decision.dining_booking and decision.travel_intent!='execute':
+                    location=decision.trip_destination
+                    trip=dining_followup(db,gateway.store,user,run,request_text,
+                        [{'domain':'dining','criteria':{'location':location} if location else {}}])
+                    if trip:
+                        choose_dates=False
+                        from availability.followup import party_counts
+                        counts=party_counts(request_text)
+                        if len(counts)==1:trip['party_size']=next(iter(counts))
+                        db.event(run,'routing_trip_dining',{'previous_intent':decision.travel_intent,'criteria':trip})
+                        db.event(run,'trip_requested',{'source_message':context['current_user_message']['id'],'criteria':trip})
+                        decision=decision.model_copy(update={'travel_intent':'check_availability','dining_availability':True,
+                            'travel_availability':False,'trip_itinerary':False,'requires_research':False,
+                            'trip_destination':trip['location'],'trip_start':trip['start'],'trip_end':trip['end'],
+                            'trip_party_size':trip['party_size']})
                 open_requested=open_requested or decision.browser_navigation
                 research_required=decision.requires_research
                 booking_required=decision.dining_booking
