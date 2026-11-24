@@ -2,6 +2,8 @@
 
 ## 2026-11-23
 
+- Display automatically chosen windows as "Proposed travel dates" with the actual dates. Remove the "Not selected yet" placeholder from exploration responses without a sourced window.
+
 - Undated trip checks now research a suitable seasonal window and adopt it provisionally without asking for dates or confirmation. Flights and hotels inherit the same window before provider validation; the response discloses the exact proposed dates. Working dates persist in the chat draft and are cleared by explicit destination/date/duration corrections rather than becoming permanent preferences. Known dates remain authoritative.
 
 - Aster now introduces itself as "Aster - your Personal Agent", including in chats whose older replies used a different assistant name. Questions about its underlying technology remain separate from its product identity.

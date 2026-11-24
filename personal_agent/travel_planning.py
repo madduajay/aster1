@@ -81,14 +81,13 @@ def planning_disclosure(draft, assumptions, trip=None, text=''):
     end=(trip or {}).get('end') or values.get('return_date')
     if start or end:
         chosen=bool(values.get('departure_date') or values.get('return_date'))
-        lines.append('**Travel dates'+(' (proposed; assumed dates)' if chosen else '')+':** '
-                     +display(start or 'not selected')+' → '+display(end or 'not selected')+'.')
+        lines.append(('**Proposed travel dates:** ' if chosen else '**Travel dates:** ')
+                     +' → '.join(display(value) for value in (start,end) if value)+'.')
     elif draft:
         windows=draft.get('windows',[])
         if windows:
-            lines.append('**Proposed date options (not confirmed):** '+'; '.join(
+            lines.append('**Proposed travel dates:** '+'; '.join(
                 display(w['start_date'])+' → '+display(w['end_date']) for w in windows)+'.')
-        else:lines.append('**Travel dates:** Not selected yet.')
     return '\n\n'.join(lines)
 
 MONTHS = ('january','february','march','april','may','june','july','august','september','october','november','december')

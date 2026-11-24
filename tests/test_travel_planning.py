@@ -24,7 +24,7 @@ def test_itinerary_disclosure_labels_defaults_and_full_proposed_dates():
     assert '**Planning defaults (assumed):**' in result
     assert 'economy cabin' in result and 'mid luxury (4-star) hotels' in result
     assert '2 travelers' in result and '1 room' in result
-    assert '**Travel dates (proposed; assumed dates):** Jan 19, 2027 → Jan 25, 2027.' in result
+    assert '**Proposed travel dates:** Jan 19, 2027 → Jan 25, 2027.' in result
 
 
 def test_disclosure_does_not_call_explicit_choices_defaults():
@@ -38,10 +38,10 @@ def test_disclosure_does_not_call_explicit_choices_defaults():
 
 def test_exploration_disclosure_keeps_dates_unselected_or_proposed():
     draft={'assumptions':DEFAULTS}
-    assert '**Travel dates:** Not selected yet.' in planning_disclosure(draft,{})
+    assert 'travel dates' not in planning_disclosure(draft,{}).lower()
     draft['windows']=[{'start_date':'2027-02-01','end_date':'2027-02-07'}]
     result=planning_disclosure(draft,{})
-    assert 'Proposed date options (not confirmed)' in result
+    assert 'Proposed travel dates' in result
     assert 'Feb 01, 2027 → Feb 07, 2027' in result
 from conftest import SummaryModel, StubBrowsers
 from test_agent import ScriptedModel, ScriptedBrowser, wait_service
@@ -211,7 +211,7 @@ async def test_undated_trip_researches_chooses_and_shares_dates_before_inventory
         draft=TravelPlans(database).load(user,sid)
         assert 'start_date' not in draft['confirmed'] and 'window_label' not in draft['selected']
         reply=database.rows("SELECT content FROM messages WHERE session_id=? AND role='assistant'",(sid,))[-1]['content']
-        assert 'proposed; assumed dates' in reply and 'May 01, 2090 → May 07, 2090' in reply
+        assert 'Proposed travel dates' in reply and 'May 01, 2090 → May 07, 2090' in reply
         assert 'Please provide departure date' not in reply
         assert sightseeing.await_count==int(itinerary)
         if itinerary:assert [c['function']['name'] for c in model.choices[:5]]==['web_search','update_travel_plan','delegate_travel','web_search','compose_trip']
@@ -224,7 +224,7 @@ def test_proposed_window_survives_restart_and_explicit_correction_clears_it(data
         'label':'best_overall_fit','reason':'Seasonal fit','source_urls':[URL]}]),SOURCES,TODAY)
     assert plans.propose_window(user,sid,mid,'Portugal',TODAY)['start']=='2090-05-01'
     draft=TravelPlans(Database(database.path)).load(user,sid)
-    assert 'proposed; assumed dates' in planning_disclosure(draft,{})
+    assert 'Proposed travel dates' in planning_disclosure(draft,{})
     assert not draft['confirmed']
     correction=database.message(user,sid,'user','Actually start on 2090-06-01.')
     draft=plans.update(user,sid,correction,DraftUpdate(confirmed=[confirmed('start_date','2090-06-01',correction,'2090-06-01')]),[],TODAY)
