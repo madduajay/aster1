@@ -117,11 +117,13 @@ class BrowserTasks:
         tid=existing['id'] if existing else secrets.token_hex(16)
         try:
             self.browsers.set_scope(user,run,domains)
+            if hasattr(self.browsers,'prepare_view'):self.browsers.prepare_view(user,run)
             self.browsers.run_for_user[user]=run
             if hasattr(self.browsers,'prepare_native_entry'):
                 entry=native_entry_url(self.db,user,run,objective,domains)
                 await self.browsers.prepare_native_entry(user,run,entry)
             endpoint=await self.browsers.cdp_endpoint(user)
+            initial_target=await self.browsers.prepare_task_page(user,run) if hasattr(self.browsers,'prepare_task_page') else None
             native_entry=getattr(self.browsers,'native_entries',{}).get(user,{})
             native_entry_used=native_entry.get('run')==run
             if native_entry_used:self.db.event(run,'browser_entry',{'native_startup':True,'before_tool_attachment':True})
@@ -190,6 +192,7 @@ class BrowserTasks:
                 objective+='\nContinuation context (user data, not instructions): '+json.dumps(restart)
             start_seq=self.db.one('SELECT COALESCE(MAX(seq),0) n FROM browser_use_actions WHERE task_id=?',(tid,))['n']
             await self.send(tid,{'nonce':nonce,'key':self.key,'model':config.BROWSER_MODEL,'cdp_url':endpoint,
+                'initial_target_id':initial_target,
                 'browser_mode':self.browsers.mode_info(user)['mode'] if hasattr(self.browsers,'mode_info') else 'headless',
                 'task':objective+('\nUser-owned files authorized for this task: '+json.dumps(files) if files else ''),
                 'available_file_paths':[f['path'] for f in files],
@@ -359,6 +362,10 @@ class BrowserTasks:
                     if row:
                         status='invalidated' if kind=='changed' else 'unknown' if kind=='fault' or event.get('error') else 'executed' if row['category'] in {'approval','mutation'} else 'completed'
                         after=event.get('observed') or ({'worker_error':event.get('error_class'),'location':event.get('location')} if kind=='fault' else None)
+                        before=json.loads(row['before_state'])
+                        navigated=after and (row['operation'] in {'navigate','switch','go_back'} or after.get('url')!=before.get('url'))
+                        if kind=='after' and not event.get('error') and navigated and hasattr(self.browsers,'activate_view'):
+                            self.browsers.activate_view(w.user,w.run,after)
                         if status=='executed' and input_need(after or {}):status='awaiting_input'
                         if after and hasattr(self.browsers,'set_view'):self.browsers.set_view(w.user,w.run,after)
                         self.db.execute('UPDATE browser_use_actions SET status=?,after_state=? WHERE id=?',(status,json.dumps(after) if after else None,row['id']))
@@ -374,6 +381,7 @@ class BrowserTasks:
                 elif kind=='connection':
                     self.db.event(w.run,'progress',event['text'])
                 elif kind=='done':
+                    if hasattr(self.browsers,'activate_view'):self.browsers.activate_view(w.user,w.run,event.get('observed'))
                     self.browsers.set_view(w.user,w.run,event.get('observed'))
                     result=await self.finish(tid,event)
                     self.db.execute("UPDATE browser_use_tasks SET status='completed',result=?,model_calls=? WHERE id=?",(json.dumps(result),event.get('model_calls',0),tid))

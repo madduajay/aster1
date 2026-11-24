@@ -62,11 +62,17 @@ class BrowserControlView {
       const socket=this.socket=new WebSocket(url);socket.binaryType='blob';
       const timeout=setTimeout(()=>{reject(new Error('The interactive browser could not connect. Refresh to try again.'));this.close();},12000);
       socket.onmessage=event=>{
+        if(this.intentional||this.socket!==socket)return;
         if(event.data instanceof Blob){
-          if(this.fitOnly){
-            const width=this.width,height=this.height;
-            this.image.onload=this.imageLoaded=()=>{this.renderedWidth=width;this.renderedHeight=height;this.frameReady=true;};
-          }
+          if(this.imageLoaded)this.image.removeEventListener('load',this.imageLoaded);
+          const width=this.width,height=this.height;
+          this.imageLoaded=()=>{
+            this.image.style.visibility='visible';this.image.hidden=false;
+            if(this.fitOnly){this.renderedWidth=width;this.renderedHeight=height;this.frameReady=true;}
+          };
+          // Keep the preview's load handler: a failed preview may have hidden
+          // the image, and a new live frame must make it visible again.
+          this.image.addEventListener('load',this.imageLoaded,{once:true});
           const previous=this.frameURL;this.frameURL=URL.createObjectURL(event.data);this.image.src=this.frameURL;
           if(previous)URL.revokeObjectURL(previous);return;
         }
@@ -121,7 +127,7 @@ class BrowserControlView {
   close(){
     this.intentional=true;this.connected=false;this.socket?.close();
     this.observer?.disconnect();clearTimeout(this.resizeTimer);
-    if(this.image.onload===this.imageLoaded)this.image.onload=null;
+    if(this.imageLoaded)this.image.removeEventListener('load',this.imageLoaded);
     for(const p of this.pending.values()){clearTimeout(p.timeout);p.resolve({cancelled:true});}this.pending.clear();
     if(this.frameURL){URL.revokeObjectURL(this.frameURL);this.frameURL=null;}
   }

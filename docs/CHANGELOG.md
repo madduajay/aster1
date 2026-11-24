@@ -1,5 +1,16 @@
 # Changelog
 
+## 2026-11-23
+
+- Aster now introduces itself as "Aster - your Personal Agent", including in chats whose older replies used a different assistant name. Questions about its underlying technology remain separate from its product identity.
+
+- Reduced unnecessary routine-browser approvals for POST-backed searches, calendar cells, cookie choices, popup dismissal, checkout navigation and read-only account links. Private input, final commitments and account-changing actions retain their existing boundaries.
+- New Chat and new prompts clear the browser panel before submission, and stale asynchronous preview responses cannot restore it. Unrelated browser tasks, including topic changes within the same chat after the old view was retired, start in a fresh tab explicitly bound to the Browser Use worker. Their preview stays hidden until current-task navigation or completion; related follow-ups retain their linked page. Unbound runs no longer capture an arbitrary tab from a previous task.
+
+- Fixed a blank embedded browser after a preview load error: live frames now restore image visibility and retain the preview load handler across Take control / Release control. Real image-decode fixtures cover both display modes; the Amex login form was visibly restored in the live Aster panel without restarting Chrome.
+
+- Visible Chrome now uses an explicitly allocated loopback debugging port rather than Chrome's special port-zero launch mode. Startup discovers and validates the new browser endpoint directly, then publishes the endpoint file for existing workers. Existing profiles, browser security and networking settings are retained. An isolated native Chrome fixture confirms page load before attachment and `navigator.webdriver=false` after attachment. Live acceptance: the user confirmed successful manual Amex sign-in in Aster after this change; ordinary Chrome had worked while the prior Aster launch failed. The isolated fixture verifies the launch behavior, while the Amex result is user-confirmed. The precise server-side rejection mechanism is not independently established.
+
 ## 2026-11-22
 
 - Specific itinerary requests with a known destination and date range now override a contradictory exploration classification. The gate recovers explicit ISO or month-name ranges, retains occupancy/cabin/rating/budget requirements, and invokes the required Travel/Dining services before main-agent sightseeing research. Flexible-date and open-ended destination requests remain exploratory. Regression coverage includes a deliberately misclassified, fully specified Dubai itinerary.

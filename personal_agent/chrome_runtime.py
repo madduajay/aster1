@@ -3,8 +3,11 @@ import asyncio
 from dataclasses import dataclass
 import os
 from pathlib import Path
+import socket
 import time
 from urllib.parse import urlsplit
+
+import httpx
 
 
 def chrome_executable():
@@ -14,15 +17,34 @@ def chrome_executable():
     raise ValueError('Install Google Chrome to use Visible mode')
 
 
-def chrome_arguments(profile,disable_http2=False,initial_url='about:blank'):
+def available_debug_port():
+    with socket.socket() as sock:
+        sock.bind(('127.0.0.1',0))
+        return sock.getsockname()[1]
+
+
+def chrome_arguments(profile,disable_http2=False,initial_url='about:blank',*,debug_port=None):
     if initial_url!='about:blank':
         p=urlsplit(initial_url)
         if p.scheme not in {'http','https'} or not p.hostname or p.username or p.password or p.query or p.fragment:
             raise ValueError('Native startup requires a public entry URL without session parameters')
+    debug_port=available_debug_port() if debug_port is None else debug_port
+    if type(debug_port) is not int or not 1<=debug_port<=65535:raise ValueError('Invalid local debugging port')
     args=[str(chrome_executable()),'--user-data-dir='+str(profile),'--profile-directory=Default',
-          '--disable-sync','--remote-debugging-address=127.0.0.1','--remote-debugging-port=0']
+          '--disable-sync','--remote-debugging-address=127.0.0.1','--remote-debugging-port='+str(debug_port)]
     if disable_http2:args.append('--disable-http2')
     return args+[initial_url]
+
+
+async def debugging_endpoint(port):
+    async with httpx.AsyncClient(trust_env=False,timeout=.5) as client:
+        response=await client.get(f'http://127.0.0.1:{port}/json/version')
+        response.raise_for_status()
+        endpoint=response.json().get('webSocketDebuggerUrl','')
+    parsed=urlsplit(endpoint)
+    if parsed.scheme!='ws' or parsed.hostname!='127.0.0.1' or parsed.port!=port or not parsed.path.startswith('/devtools/browser/') or parsed.username or parsed.password or parsed.query or parsed.fragment:
+        raise ValueError('Chrome returned an invalid local debugging endpoint')
+    return endpoint
 
 
 @dataclass
@@ -61,11 +83,10 @@ async def launch_visible_chrome(profile,disable_http2=False,initial_url='about:b
     if lock.exists() or lock.is_symlink():
         raise ValueError('This Visible browser profile is already in use. Close its Chrome window before reopening it.')
     port_file=profile/'DevToolsActivePort'
-    previous_port=port_file.read_bytes() if port_file.exists() else None
-    started=time.time()
+    debug_port=available_debug_port()
     env={k:v for k,v in os.environ.items() if not k.endswith('API_KEY') and k not in {
         'PERSONAL_AGENT_KEY_FD','OPENAI_BASE_URL','OPENAI_API_BASE','OPENAI_PROXY','NGROK_AUTHTOKEN'}}
-    process=await asyncio.create_subprocess_exec(*chrome_arguments(profile,disable_http2,initial_url),env=env,
+    process=await asyncio.create_subprocess_exec(*chrome_arguments(profile,disable_http2,initial_url,debug_port=debug_port),env=env,
         stdin=asyncio.subprocess.DEVNULL,stdout=asyncio.subprocess.DEVNULL,stderr=asyncio.subprocess.DEVNULL,
         start_new_session=True)
     native=NativeChrome(process,profile=profile)
@@ -73,19 +94,16 @@ async def launch_visible_chrome(profile,disable_http2=False,initial_url='about:b
         async with asyncio.timeout(20):
             while True:
                 if process.returncode is not None:raise ValueError('Chrome closed before its connection was ready')
-                if port_file.exists() and port_file.stat().st_mtime>=started-1:
-                    try:current_port=port_file.read_bytes()
-                    except OSError:
-                        await asyncio.sleep(.05);continue
-                    if current_port==previous_port:
-                        await asyncio.sleep(.05);continue
-                    lines=current_port.decode().splitlines()
-                    if len(lines)>=2 and lines[0].isdigit() and 0<int(lines[0])<65536 and lines[1].startswith('/devtools/browser/'):
-                        native.endpoint='ws://127.0.0.1:'+lines[0]+lines[1]
-                        # Match the tested sequence: Chrome starts the provider
-                        # page itself, with a brief uninstrumented startup period.
-                        if initial_url!='about:blank':await asyncio.sleep(2)
-                        return native
+                try:endpoint=await debugging_endpoint(debug_port)
+                except (httpx.HTTPError,ValueError,OSError):endpoint=None
+                if endpoint and process.returncode is None:
+                    native.endpoint=endpoint
+                    # Explicit ports do not create this file in Chrome. Keep
+                    # the existing worker discovery contract, after validation.
+                    port_file.write_text(str(debug_port)+'\n'+urlsplit(endpoint).path+'\n')
+                    port_file.chmod(0o600)
+                    if initial_url!='about:blank':await asyncio.sleep(2)
+                    return native
                 await asyncio.sleep(.05)
     except BaseException:
         await native.close()

@@ -176,6 +176,20 @@ def routine_preparation(name,params,observed,inspect_only=False):
     account=bool(re.search(r'/(?:account|settings|profile|security|billing|payment)(?:/|$)',urlsplit(observed.get('url','')).path,re.I))
     if CART_ADD.fullmatch(label) or re.search(r'\b(?:add to (?:wishlist|favorites)|freeze|unfreeze|lock|unlock)\b',label,re.I):return False
     if re.fullmatch(r'(?:execute|commit|finali[sz]e|finish|complete)(?:\s+(?:order|purchase|booking|reservation|application|checkout|payment))?',label,re.I):return False
+    if name in {'click','click_selector'}:
+        cookies=bool(re.search(r'\bcookies?\b',observed.get('text',''),re.I))
+        if cookies and re.fullmatch(r'(?:reject(?: all)?|decline(?: all)?|accept(?: all| cookies| necessary cookies)?|necessary only|only necessary|continue without accepting)\s*[→›»]?',label,re.I):return True
+        if re.fullmatch(r'(?:close[_ ]popup|close dialog|dismiss|room icon|room details|room options)',label,re.I):return True
+        # Search and calendar controls are viewing operations even when the
+        # website implements them using POST forms or non-button elements.
+        if (node.get('search_context') or re.match(r'^(?:search|find)\b',label,re.I)) and not RISK.search(label):return True
+        if re.fullmatch(r'(?:checkout|go to checkout|proceed to checkout|continue to checkout)',label,re.I):return not inspect_only
+        months=r'jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?'
+        if not account and not form and re.fullmatch(r'\d{1,2}\s+(?:'+months+r')\s+\d{1,2}',label,re.I):return True
+        href=node.get('href','')
+        if account and node.get('tag')=='A' and urlsplit(href).scheme in {'http','https'} and not RISK.search(label):return True
+        if account and node.get('tag') in {'A','BUTTON'} and not form and re.fullmatch(r'(?:checking|savings)(?:\s+account)?[ .•·*\-]*\d{0,4}',label,re.I):return True
+    if name=='send_keys' and params.get('keys','').casefold()=='enter' and node.get('search_context'):return True
     if name=='input' and not account:
         return kind=='search' or role=='searchbox' or node.get('search_context') or bool(re.search(r'\bsearch\b',label,re.I))
     if name in {'click','click_selector'}:

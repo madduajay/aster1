@@ -247,11 +247,41 @@ class BrowserHost:
         if not self.db.one('SELECT id FROM runs WHERE id=? AND user_id=?',(run,user)):raise LookupError('Browser run not found')
         view=self.views.setdefault((user,run),{'live':True,'url':'','title':'','frame':None,'captured':0})
         view['live']=True
-        if observed:
+        if observed and not view.get('waiting_for_navigation'):
             for key in ['url','title','target_id']:
                 if key in observed:view[key]=observed[key]
         older=[key for key in self.views if key[0]==user and key!=(user,run)]
         for key in older[:-2]:self.views.pop(key,None)
+
+    def prepare_view(self,user,run):
+        previous=self.run_for_user.get(user)
+        self.set_view(user,run)
+        linked=self.db.one("SELECT id FROM events WHERE run_id=? AND kind='browser_context' LIMIT 1",(run,))
+        if previous!=run and not linked:
+            self.views[(user,run)]['waiting_for_navigation']=True
+
+    async def prepare_task_page(self,user,run):
+        view=self.views.get((user,run),{})
+        if not view.get('waiting_for_navigation'):
+            if view.get('target_id'):return view['target_id']
+            linked=self.db.one("SELECT payload FROM events WHERE run_id=? AND kind='browser_context' ORDER BY id DESC LIMIT 1",(run,))
+            return json.loads(linked['payload']).get('target_id') if linked else None
+        if view.get('initial_target_id'):return view['initial_target_id']
+        context=await self.context(user)
+        entry=self.native_entries.get(user,{})
+        page=next((p for p in context.pages if entry.get('run')==run and audit_url(p.url)==entry.get('url')),None)
+        if page is None:page=await context.new_page()
+        client=await context.new_cdp_session(page)
+        try:target=(await client.send('Target.getTargetInfo'))['targetInfo']['targetId']
+        finally:await client.detach()
+        view['initial_target_id']=target
+        return target
+
+    def activate_view(self,user,run,observed):
+        if not observed or not allowed_url(observed.get('url',''),self.scopes.get((user,run),[])):return
+        view=self.views.get((user,run))
+        if view:view.pop('waiting_for_navigation',None)
+        self.set_view(user,run,observed)
 
     def retire_view(self,user,run):
         if not self.db.one('SELECT id FROM runs WHERE id=? AND user_id=?',(run,user)):raise LookupError('Browser run not found')
@@ -265,14 +295,15 @@ class BrowserHost:
         if not view:return {'available':False}
         live=view['live'] and self.run_for_user.get(user)==run and user in self.contexts
         dialog=next((d for p,d in self.dialogs.items() if self.contexts.get(user) and p in self.contexts[user].pages),None)
-        return {'available':bool(live or view['frame']),'live':bool(live),'url':view['url'],'title':view['title'],'headless':self.mode_info(user)['mode']=='headless','target_id':view.get('target_id',''),
+        bound=not view.get('waiting_for_navigation') and bool(view.get('url') or view.get('target_id'))
+        return {'available':bool(bound and (live or view['frame'])),'live':bool(live and bound),'url':view['url'],'title':view['title'],'headless':self.mode_info(user)['mode']=='headless','target_id':view.get('target_id',''),
                 'dialog':{'type':dialog.type,'message':redact(dialog.message)} if dialog else None}
 
 
     async def preview(self,user,run):
         if not self.db.one('SELECT id FROM runs WHERE id=? AND user_id=?',(run,user)):raise LookupError('Browser run not found')
         view=self.views.get((user,run))
-        if not view:return None
+        if not view or view.get('waiting_for_navigation'):return None
         async with self.preview_locks.setdefault(user,asyncio.Lock()):
             live=view['live'] and self.run_for_user.get(user)==run
             if live and (time.monotonic()-view['captured']>=1 or not view['frame']):
@@ -295,7 +326,6 @@ class BrowserHost:
                             self.page_targets[candidate]=target
                         if target==view['target_id']:page=candidate;break
                     elif candidate.url==view.get('url'):page=candidate;break
-                if page is None and not view.get('target_id') and pages:page=pages[-1]
                 if page:
                     try:
                         if self.mode_info(user)['mode']=='visible':

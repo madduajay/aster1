@@ -448,6 +448,9 @@ async def main():
         file_system_path=init['workspace'],available_file_paths=init.get('available_file_paths',[]),
         extend_system_message=init['instructions'],register_new_step_callback=None)
     async def run():
+        if init.get('initial_target_id'):
+            await browser.start()
+            await browser.get_or_create_cdp_session(target_id=init['initial_target_id'],focus=True)
         history=await agent.run(max_steps=init.get('max_steps',30),on_step_start=step)
         try:observed=await observe(browser)
         except Exception as exc:

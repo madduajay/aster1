@@ -11,6 +11,33 @@ from personal_agent.browser_verification import navigation_evidence
 from test_browser_tasks import boundary,observed,prepare
 
 
+@pytest.mark.parametrize('label,tag,kind,form,text,operation,extra',[
+    ('Search for a destination or hotel name','BUTTON','submit',{'method':'post','sensitive':False},'Hotel search','click',{}),
+    ('2 December 02','DIV','',None,'Choose dates','click',{}),
+    ('10 December 10','DIV','',None,'Choose dates','click',{}),
+    ('Continue without Accepting →','BUTTON','submit',None,'Cookie preferences','click',{}),
+    ('Reject','BUTTON','submit',None,'We use cookies','click',{}),
+    ('Checkout','BUTTON','submit',None,'Room selection','click',{}),
+    ('close_popup','A','',{'method':'post'},'Room selection','click',{}),
+    ('Room Icon','A','',{'method':'post'},'Room selection','click',{}),
+    ('Search by Destination City, Landmark, Hotel','INPUT','text',{'method':'post'},'Hotel search','send_keys',{'search_context':True}),
+])
+def test_observed_navigation_false_positives_proceed_without_approval(label,tag,kind,form,text,operation,extra):
+    state=observed(label);state['text']=text
+    state['node'].update(tag=tag,type=kind,form=form,**extra)
+    assert classify_action(operation,{'keys':'Enter'} if operation=='send_keys' else {},state,policy='poc')[0] in {'preparation','read'}
+
+
+def test_opening_account_details_is_read_only_but_account_changes_are_not():
+    state=observed('Checking account details');state['url']='https://example.com/account'
+    state['node'].update(tag='A',type='',href='https://example.com/account/checking')
+    assert classify_action('click',{},state,policy='poc')[0] in {'preparation','read'}
+    state['node'].update(name='Checking ...0946',href='#')
+    assert classify_action('click',{},state,policy='poc')[0]=='preparation'
+    state['node'].update(name='Delete account',href='https://example.com/account/delete')
+    assert classify_action('click',{},state,policy='poc')[0]=='approval'
+
+
 def test_public_embeddings_do_not_expand_the_agent_action_scope(database,monkeypatch):
     from personal_agent.browser_host import BrowserHost
     host=BrowserHost(database)

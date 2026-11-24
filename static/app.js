@@ -467,8 +467,10 @@ $('browser-take-control').onclick=async()=>{
 };
 $('browser-cancel-task').onclick=()=>cancelBrowserTask($('browser-cancel-task').dataset.run);
 async function newChat() {
+  const generation=++navigation;
+  clearBrowser();pendingApproval=null;
   feed?.close();feed=null;$('input').disabled=true;$('new').disabled=true;
-  try{const row=await api('/sessions','POST',{});await openSession(row.id);}
+  try{const row=await api('/sessions','POST',{});if(generation!==navigation)return;await openSession(row.id);}
   finally{$('input').disabled=false;$('new').disabled=false;}
 }
 function listen(run, after=0,previewRun=null) {
@@ -554,6 +556,9 @@ $('input').onkeydown=async e=>{
     if(!draftFiles.length&&pendingApproval&&/^(approve|cancel|reject)$/i.test(text)){await respondToApproval(pendingApproval,text.toLowerCase()==='approve'?'approve':'reject');return;}
     if(!draftFiles.length&&pendingInput&&/^(?:cancel|stop|\/stop)$/i.test(text)){await cancelInput(pendingInput);return;}
     const inputId=draftFiles.length?null:pendingInput?.id;
+    // Hide the prior page immediately. The server restores it only when this
+    // prompt is explicitly related to that browser context.
+    clearBrowser();
     // Reconnect after submission: same-chat running tasks keep their run ID,
     // while explicit cancellation or switching chats can retire the old stream.
     ++navigation;feed?.close();feed=null;uploadBusy=true;$('attach').disabled=true;$('input').disabled=true;$('new').disabled=true;renderDraftFiles();
