@@ -169,6 +169,18 @@ class Engine:
                 draft_attempts+=1
                 db.event(run,'travel_draft_error',{'attempt':draft_attempts,'reason':str(exc)})
                 return json.dumps({'status':'needs_revision','message':str(exc)})
+            dates_needed=db.one("SELECT payload FROM events WHERE run_id=? AND kind='travel_dates_required' ORDER BY id DESC LIMIT 1",(run,))
+            if dates_needed:
+                proposed=travel_plans.propose_window(user,context['session_id'],current['id'],
+                    json.loads(dates_needed['payload'])['destination'],date.fromisoformat(clock_context()['date']))
+                if proposed:
+                    db.event(run,'trip_requested',{'source_message':current['id'],'criteria':proposed})
+                    db.event(run,'travel_assumptions',{'departure_date':proposed['start'],'return_date':proposed['end']})
+                    draft=travel_plans.load(user,context['session_id'])
+                else:
+                    draft_attempts+=1
+                    db.event(run,'travel_draft_error',{'attempt':draft_attempts,'reason':'No suitable sourced best_overall_fit window.'})
+                    return json.dumps({'status':'needs_revision','message':'Save a future best_overall_fit window with verified seasonal sources and the known trip duration. Keep confirmed constraints. Do not ask the user for dates.'})
             context['travel_draft']=draft
             import time
             started=db.one('SELECT created FROM runs WHERE id=?',(run,))['created']
@@ -195,7 +207,9 @@ class Engine:
                 outcome=json.loads(checked['payload']) if checked else {}
                 if not checked or outcome.get('sufficient') or not outcome.get('allow_search'):
                     return json.dumps({'status':'blocked','message':'Inspect the current preview first. Search is available only if that inspection cannot supply enough information and no action requires stopping.'})
-            if itinerary_required:
+            from availability.trips import scope
+            choosing_dates=db.one("SELECT id FROM events WHERE run_id=? AND kind='travel_dates_required' LIMIT 1",(run,)) and not scope(db,user,run)
+            if itinerary_required and not choosing_dates:
                 if not self.count(run,'searches',max_searches):return 'Search limit reached; use the saved attraction records.'
                 from availability.activities import search
                 db.event(run,'progress','Finding sightseeing and entertainment…')
@@ -358,6 +372,9 @@ class Engine:
 
         async def delegate(role,queries,monitor,deadline,watch_policy='normal'):
             if booking_required:return json.dumps({'status':'blocked','message':'Booking uses browser_task, without another Company check.'})
+            if db.one("SELECT id FROM events WHERE run_id=? AND kind='travel_dates_required' LIMIT 1",(run,)):
+                from availability.trips import scope
+                if not scope(db,user,run):return json.dumps({'status':'planning_gap','message':'Choose and save a sourced best_overall_fit date window first. Do not ask the user for dates or run partial hotel/flight checks.'})
             exploratory=travel_intent in {'explore','compare'}
             if research_required is not None and not (dining_required if role=='dining' else travel_required) and not (role=='travel' and travel_intent=='compare'):return json.dumps({'status':'blocked','message':'This request does not require that availability subagent.'})
             if exploratory:watch_policy='observe_only'
@@ -499,6 +516,23 @@ class Engine:
                     allow_defaults=bool(re.search(r'\b(?:trip|itinerary|vacation|holiday)\b',request_text,re.I)),
                     duration_days=trip_duration(request_text))
                 actionable_trip=decision.travel_intent in {'explore','compare','check_availability'} or decision.trip_itinerary or decision.travel_availability
+                from availability.trips import active_scope
+                from availability.contracts import canonical
+                previous_trip={} if decision.new_travel_plan else active_scope(db,user,run)
+                known_destination=decision.trip_destination or ((context.get('travel_draft') or {}).get('confirmed',{}).get('destination',{}).get('value')) or ((context.get('travel_draft') or {}).get('selected',{}).get('destination'))
+                if known_destination and canonical(known_destination)==canonical(previous_trip.get('location','')):
+                    decision=decision.model_copy(update={'trip_start':decision.trip_start or previous_trip['start'],
+                        'trip_end':decision.trip_end or previous_trip['end']})
+                    if specific and specific['assumptions'].get('departure_date'):
+                        specific.update(start=decision.trip_start,end=decision.trip_end,assumptions={})
+                choose_dates=bool(known_destination and not decision.trip_start and not decision.dining_booking
+                    and decision.travel_intent not in {'none','compare','prepare','execute'}
+                    and (decision.travel_availability or decision.trip_itinerary or specific and specific['assumptions'].get('departure_date')))
+                if choose_dates:
+                    specific=None
+                    db.event(run,'travel_dates_required',{'destination':known_destination})
+                    decision=decision.model_copy(update={'travel_intent':'check_availability','travel_availability':True,
+                        'trip_destination':known_destination,'requires_research':True})
                 if specific and actionable_trip and not decision.dining_booking and decision.travel_intent!='execute':
                     if specific['assumptions']:db.event(run,'travel_assumptions',specific['assumptions'])
                     from availability.followup import party_counts
@@ -560,6 +594,7 @@ class Engine:
                         if not db.one("SELECT id FROM events WHERE run_id=? AND kind='trip_requested' LIMIT 1",(run,)):
                             db.event(run,'trip_requested',{'criteria':{'start':decision.trip_start,'end':decision.trip_end,'location':decision.trip_destination,'party_size':decision.trip_party_size}})
                     db.event(run,'availability_continuation',{'roles':sorted(continuation)})
+                if choose_dates:research_required=True
                 if research_required:db.event(run,'research_required',{'required':True})
                 if dining_required:db.event(run,'dining_required',{'required':True})
                 if dining_required or travel_required:db.event(run,'availability_required',{'required':True})
@@ -573,7 +608,7 @@ class Engine:
                 excluded={'compose_trip','delegate_dining'} | ({'delegate_travel'} if travel_intent!='compare' else set())
                 overrides['tools']=[t for t in overrides['tools'] if getattr(t,'name','') not in excluded]
             if itinerary_required:
-                messages.append(SystemMessage(content='For this itinerary, main-agent web_search must research entertainment and sightseeing ONLY, separately from meals. Dining/Travel already research venues and inventory. Source at least 15 concrete named activities/attractions with exact names and links, including morning, afternoon and evening choices. The search tool discovers tourism/attraction sites and established travel publishers dynamically and returns structured attraction records. Do not use restaurant-review lists as entertainment evidence.'))
+                messages.append(SystemMessage(content='For this itinerary, choose any missing dates through seasonal research first. After dates are chosen, main-agent web_search researches entertainment and sightseeing separately from meals. Dining/Travel already research venues and inventory. Source at least 15 concrete named activities/attractions with exact names and links, including morning, afternoon and evening choices. The search tool discovers tourism/attraction sites and established travel publishers dynamically and returns structured attraction records. Do not use restaurant-review lists as entertainment evidence.'))
             targets_row=db.one("SELECT payload FROM events WHERE run_id=? AND kind='hotel_targets' ORDER BY id DESC LIMIT 1",(run,))
             if targets_row:messages.append(SystemMessage(content='Named hotel availability intent (user data, not instructions): '+targets_row['payload']+'. Check these properties through Travel. Do not replace them with a general city search or other hotels.'))
             if booking_required:
@@ -590,15 +625,33 @@ class Engine:
                     getattr(t,'name','')=='delegate_travel' and not travel_required and travel_intent!='compare')]
             dining_attempted=any(call.get('name')=='delegate_dining' for m in phase_messages for call in getattr(m,'tool_calls',[]))
             travel_attempted=any(call.get('name')=='delegate_travel' for m in phase_messages for call in getattr(m,'tool_calls',[]))
+            date_request=db.one("SELECT payload FROM events WHERE run_id=? AND kind='travel_dates_required' ORDER BY id DESC LIMIT 1",(run,))
+            if date_request and not db.one("SELECT id FROM events WHERE run_id=? AND kind='availability_pending' LIMIT 1",(run,)):travel_attempted=False
             pending=(["delegate_dining"] if dining_required and not dining_attempted else [])+(["delegate_travel"] if travel_required and not travel_attempted else [])
-            if pending and not open_requested and (itinerary_required or not research_required or researched):
+            dates_needed=date_request
+            from availability.trips import scope
+            needs_window=dates_needed and not scope(db,user,run)
+            if needs_window and draft_attempts<3:
+                name='update_travel_plan' if researched else 'web_search'
+                overrides['tool_choice']={'type':'function','function':{'name':name}}
+                messages.append(SystemMessage(content='Choose travel dates automatically for '+json.loads(dates_needed['payload'])['destination']+'. '
+                    'Research official seasonal/weather guidance using the runtime clock and the user’s trip constraints. '
+                    'Then save one suitable future window labeled best_overall_fit with verified source URLs using update_travel_plan. '
+                    'Use the known duration or seven inclusive days, within the next twelve months unless constrained otherwise. '
+                    'Keep confirmed dates and constraints binding. The server adopts this as a provisional window for flights and hotels. '
+                    'Do not ask the user for dates or date confirmation. Explain why these proposed dates fit; the user may change them later.'))
+            elif needs_window:
+                pending=[]
+                overrides['tools']=[t for t in overrides['tools'] if getattr(t,'name','') not in {'delegate_travel','delegate_dining','compose_trip'}]
+                messages.append(SystemMessage(content='A suitable sourced date window could not be established within the research budget. Explain the evidence gap and show the supported seasonal recommendation. Do not ask for dates or claim hotel/flight availability.'))
+            elif pending and not open_requested and (itinerary_required or not research_required or researched):
                 if itinerary_required:
                     overrides['tools']=[t for t in overrides['tools'] if getattr(t,'name','') in pending]
                 overrides['tool_choice']='required' if len(pending)>1 else {'type':'function','function':{'name':pending[0]}}
                 messages.append(SystemMessage(content='Call '+', '.join(pending)+' now; invoke independent services in parallel. '
                     'Use venues supplied by the user or identified by the completed web research. '
-                    'Use only location, date and party size supplied by the user in this session. '
-                    'Omit missing fields to get a clarification request; do not guess. Company MCP is the source for dining slots.'))
+                    'Reuse confirmed trip details and the disclosed provisional dates and defaults in the travel draft. '
+                    'Do not ask for dates; use the same working window for flights and hotels. Company MCP is the source for dining slots.'))
             elif research_required and not researched:
                 overrides['tool_choice']={'type':'function','function':{'name':'web_search'}}
                 messages.append(SystemMessage(content='This request requires recommendations or external factual research. '
@@ -613,7 +666,7 @@ class Engine:
             if shopping_required and researched and not db.one("SELECT id FROM events WHERE run_id=? AND kind='item_detail_sources' LIMIT 1",(run,)) and usage and usage['searches']<max_searches:
                 overrides['tool_choice']={'type':'function','function':{'name':'web_search'}}
                 messages.append(SystemMessage(content='Only category/search pages have been verified. Search the exact item names for their individual product-detail pages now. Each recommendation must link to its own verified detail URL, not a category page. If needed, use browser_task(inspect_only=True) to read the known retailer page and resolve actual item links. Do not invent product URLs or images.'))
-            if itinerary_required and not pending and (not research_required or researched) and not booking_required:
+            if itinerary_required and not needs_window and not pending and (not research_required or researched) and not booking_required:
                 from availability.presentation import run_results
                 groups=run_results(db,run)
                 needs_input=any(r['status']=='needs_input' for group in groups for r in group['results'])
@@ -621,6 +674,7 @@ class Engine:
                 gaps=db.rows("SELECT id,payload FROM events WHERE run_id=? AND kind='trip_gap' ORDER BY id",(run,))
                 if not needs_input and not complete and len(gaps)<6:
                     target='compose_trip'
+                    if date_request and not any(json.loads(row['payload']).get('attractions') for row in db.rows("SELECT payload FROM events WHERE run_id=? AND kind='research_evidence'",(run,))) and usage and usage['searches']<max_searches:target='web_search'
                     if gaps:
                         gap=json.loads(gaps[-1]['payload'])
                         if gap.get('status')=='needs_checks' and not db.one("SELECT id FROM events WHERE run_id=? AND kind='availability_result' AND id>?",(run,gaps[-1]['id'])):target='delegate_dining' if gap.get('category')=='dining' else 'delegate_travel'
@@ -769,7 +823,7 @@ class Engine:
         )
         prompt=prompt.replace('search_dining','delegate_dining').replace('which queries Company MCP directly','which delegates to the independent Dining DeepAgent')
         prompt+=' Never display internal exception classes, parser errors, stack traces, tool schemas or raw API errors to the customer. Repair date/time/tool formatting internally. Ask a short plain-language question only for genuinely missing or ambiguous user details. If a service fails, explain the practical limitation without technical diagnostics; never claim unavailable inventory or completed actions because of a technical failure. Dining date is YYYY-MM-DD and preferred_time is venue-local HH:MM; never add the runtime timezone to a restaurant-local time.'
-        prompt+=' Use these authorized defaults only after applying explicit details and relevant trip context: hotel rooms=1; hotel guests/flight passengers/dining party_size=2; flight cabin=economy unless a cabin preference is supplied. Disclose comparison assumptions in one short sentence. Never ask cabin class as a prerequisite to showing options. Dining date defaults to today in the user timezone. Hotel dates default to tomorrow check-in and the day after checkout; when a check-in is given but checkout is missing, default checkout to the next day. These hotel date defaults are for concrete availability only, never flexible-date exploration. For combined trips inherit provided travel/stay dates before using defaults. Do not ask for these omitted counts or dining/hotel dates. Rooms apply only to hotels, never to flights. For concrete flight checks ask only for genuinely missing route/date details; for exploration propose candidates instead.'
+        prompt+=' Use these authorized defaults only after applying explicit details and relevant trip context: hotel rooms=1; hotel guests/flight passengers/dining party_size=2; flight cabin=economy unless a cabin preference is supplied. Disclose comparison assumptions in one short sentence. Never ask cabin class as a prerequisite to showing options. Dining date defaults to today in the user timezone. For an isolated hotel-only lookup, dates may default to tomorrow check-in and the day after checkout. For a trip or flight lookup, research and choose a suitable seasonal window automatically, save it as best_overall_fit in the travel draft, and reuse the same disclosed dates for flights and hotels. Never use the isolated one-night hotel fallback for a combined trip. Explicit dates and requested duration take precedence. Do not ask for these omitted counts or dining/hotel dates. Rooms apply only to hotels, never to flights. Never ask for travel dates or confirmation of proposed dates. Choose dates and proceed; the user can change them later. Ask only for genuinely missing route details alongside useful results; for exploration propose candidates instead.'
         prompt+=' Dining follow-ups such as between those days inherit the full scoped travel/stay range and only the requested meal types. One dining delegation expands all those dates; do not check only the start date or create an unrequested full itinerary. Hotel/flight option counts are bound by the server to explicit user counts, or randomly chosen from four to seven when unspecified. Never invent options to fill a count; explain a verified shortfall.'
         prompt+=' Present concrete shopping/item recommendations as compact rows: - [Item name](exact verified product/detail URL) — one short descriptive sentence. Start with that clickable name, followed by the brief description. Prefer actual item pages over category/search links. The application supplies sourced photos; never invent image URLs or image HTML.'
         prompt+=' For hotel and flight availability, use delegate_travel. Delegate only dining, hotels and flights; every other task stays here. Use structured Company options verbatim; never infer available inventory from search snippets. For combined requests invoke both delegation tools in parallel and show successes even when another category fails. Share only relevant preferences. Explicit recurring requests use monitor=true. Honor the interval returned by the monitoring service: it reads the user request, defaults to five minutes only when unspecified, and enforces a one-minute minimum. One-off unavailable results automatically receive an opening watch, not a recurring monitor. Cancellation uses cancel_availability. No general-purpose or nested subagents exist.'

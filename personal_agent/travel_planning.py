@@ -77,10 +77,10 @@ def planning_disclosure(draft, assumptions, trip=None, text=''):
     def display(value):
         try:return date.fromisoformat(value).strftime('%b %d, %Y')
         except (ValueError,TypeError):return str(value)
-    start=(trip or {}).get('start') or assumptions.get('departure_date')
-    end=(trip or {}).get('end') or assumptions.get('return_date')
+    start=(trip or {}).get('start') or values.get('departure_date')
+    end=(trip or {}).get('end') or values.get('return_date')
     if start or end:
-        chosen=bool(assumptions.get('departure_date') or assumptions.get('return_date'))
+        chosen=bool(values.get('departure_date') or values.get('return_date'))
         lines.append('**Travel dates'+(' (proposed; assumed dates)' if chosen else '')+':** '
                      +display(start or 'not selected')+' → '+display(end or 'not selected')+'.')
     elif draft:
@@ -179,8 +179,10 @@ ROUTING = (
     'For any travel request extract trip_destination, not just itineraries. A known destination means '
     'proceed with targeted planning/checks; missing dates, cabin, guests or rooms are not reasons to '
     'enter exploration. Unless explicitly supplied for this trip, default economy, upscale 4-star '
-    'mid-luxury hotels, 2 guests and 1 room. For an undated trip assume 7 days starting one week from '
-    'the runtime date and disclose the dates. Explicit duration or known trip dates take precedence. '
+    'mid-luxury hotels, 2 guests and 1 room. For an undated trip choose a suitable sourced seasonal '
+    'window in the next 12 months, using 7 inclusive days unless a duration is known. Do not ask for dates '
+    'or confirmation of proposed dates; users can change them later. Extract known destination and dates '
+    'on short follow-ups such as a departure city. Explicit duration or known trip dates take precedence. '
     ' PRIORITY: A requested itinerary with a known destination and date range is check_availability, '
     'not explore/compare, even when the user asks for recommendations or says plan a trip. Set '
     'trip_itinerary=true, travel_availability=true, and dining_availability=true for requested meals/venues. '
@@ -283,6 +285,24 @@ class TravelPlans:
             version=travel_plans.version+1,draft=excluded.draft,updated=excluded.updated''',
             (user, session, mid, json.dumps(draft), time.time()))
 
+    def propose_window(self, user, session, mid, destination, today):
+        """Choose researched dates for planning, without confirming them for the user."""
+        self._source(user,session,mid)
+        draft=self.load(user,session)
+        if not draft:return None
+        known=draft['confirmed'].get('destination',{}).get('value') or draft['selected'].get('destination')
+        if known and str(known).casefold()!=destination.casefold():return None
+        window=next((w for w in draft['windows'] if w['label']=='best_overall_fit'),None)
+        if not window:return None
+        start,end=window['start_date'],window['end_date']
+        days=draft['confirmed'].get('duration_days',{}).get('value',draft['assumptions'].get('duration_days',7))
+        if date.fromisoformat(start)<today or (date.fromisoformat(end)-date.fromisoformat(start)).days!=days-1:return None
+        for key,value in [('start_date',start),('end_date',end)]:
+            if key in draft['confirmed'] and draft['confirmed'][key]['value']!=value:return None
+        draft['assumptions'].update(departure_date=start,return_date=end,date_destination=destination)
+        self._save(user,session,draft['created_message_id'],draft)
+        return {'start':start,'end':end,'location':destination,'party_size':draft['confirmed'].get('travelers',{}).get('value',2)}
+
     def update(self, user, session, mid, patch, sources, today):
         self._source(user, session, mid)
         draft = self.load(user, session)
@@ -311,6 +331,7 @@ class TravelPlans:
         if changed & {'destination', 'duration_days', 'start_date', 'end_date', 'season', 'horizon', 'budget', 'hotel_quality', 'cabin'}:
             draft['windows'] = []
             draft['selected'].pop('window_label', None)
+            for key in ('departure_date','return_date','date_destination'):draft['assumptions'].pop(key,None)
         if 'destination' in changed:
             draft['destinations'] = []
             draft['selected'] = {}

@@ -2,6 +2,8 @@
 
 ## 2026-11-23
 
+- Undated trip checks now research a suitable seasonal window and adopt it provisionally without asking for dates or confirmation. Flights and hotels inherit the same window before provider validation; the response discloses the exact proposed dates. Working dates persist in the chat draft and are cleared by explicit destination/date/duration corrections rather than becoming permanent preferences. Known dates remain authoritative.
+
 - Aster now introduces itself as "Aster - your Personal Agent", including in chats whose older replies used a different assistant name. Questions about its underlying technology remain separate from its product identity.
 
 - Reduced unnecessary routine-browser approvals for POST-backed searches, calendar cells, cookie choices, popup dismissal, checkout navigation and read-only account links. Private input, final commitments and account-changing actions retain their existing boundaries.

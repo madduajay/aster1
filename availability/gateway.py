@@ -260,6 +260,14 @@ class Gateway:
             trip=active_scope(self.db,user,run)
             def same_city(left,right):
                 return bool(left and right and (canonical(left)==canonical(right) or location(left) and location(left)==location(right)))
+            from personal_agent.travel_planning import TravelPlans
+            draft=TravelPlans(self.db).load(user,owned['session_id']) or {}
+            assumed=draft.get('assumptions',{})
+            destination=assumed.get('date_destination','')
+            if assumed.get('departure_date') and assumed.get('return_date') and any(same_city(destination,q.criteria.get('destination','')) for q in queries):
+                trip={'start':assumed['departure_date'],'end':assumed['return_date'],'location':destination}
+                self.db.event(run,'travel_assumptions',{key:assumed[key] for key in ('departure_date','return_date')})
+                self.db.event(run,'trip_requested',{'source_message':source['id'],'criteria':trip})
             for query in queries:
                 if query.domain!='flights':continue
                 c=query.criteria;destination=c.get('destination','')

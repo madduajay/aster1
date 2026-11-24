@@ -170,6 +170,67 @@ async def run_planning(database, users, intent, user_text, responses, **decision
     return service, model, router_call, uid, sid, run
 
 
+@pytest.mark.parametrize('itinerary',[False,True])
+async def test_undated_trip_researches_chooses_and_shares_dates_before_inventory(database,users,monkeypatch,itinerary):
+    from availability.gateway import Gateway
+    monkeypatch.setattr('personal_agent.agent.clock_context',lambda:{'date':TODAY.isoformat()})
+    captured=[]
+    async def check(gateway,user,run,queries,role,*args,**kwargs):
+        task=gateway.envelope(user,run,queries,role)
+        captured.append(task)
+        result={'results':[{'domain':q.domain,'criteria':q.criteria,'status':'completed','available':False,'options':[]} for q in task.queries]}
+        gateway.db.event(run,'availability_result',result)
+        return result
+    monkeypatch.setattr(Gateway,'delegate',check)
+    window={'start_date':'2090-05-01','end_date':'2090-05-07','label':'best_overall_fit',
+            'reason':'Suitable sunny season according to the tourism guide','source_urls':[URL]}
+    queries=[{'domain':'flights','criteria':{'origin':'Phoenix','destination':'Portugal'}},
+             {'domain':'hotels','criteria':{'destination':'Portugal'}}]
+    sightseeing=AsyncMock(return_value={'answer':'Lisbon sights','sources':SOURCES,'attractions':[{'name':'Belém Tower','source_url':URL,'period':'morning'}]})
+    monkeypatch.setattr('availability.activities.search',sightseeing)
+    def compose(db,gateway,user,run,*args,**kwargs):
+        db.event(run,'trip_plan',{})
+        return {'status':'completed'}
+    monkeypatch.setattr('availability.presentation.compose',compose)
+    monkeypatch.setattr('availability.presentation.render',lambda plan:'A sourced itinerary.')
+    replies=[call('web_search',{'query':'Portugal best sunny travel season','official_domains':['visitportugal.com']},'season'),
+        call('update_travel_plan',{'update':{'windows':[window]}},'dates'),
+        call('delegate_travel',{'queries':queries},'inventory')]
+    if itinerary:replies += [call('web_search',{'query':'Lisbon sights','official_domains':['visitportugal.com']},'sights'),call('compose_trip',{'days':[]},'compose')]
+    replies += [AIMessage(content='I chose May 1–7 for seasonal fit; you can change these proposed dates. No matching inventory was returned.')]
+    service,model,router,user,sid,run=await run_planning(database,users,'check_availability','Phoenix AZ',replies,
+        trip_destination='Portugal',travel_availability=True,trip_itinerary=itinerary)
+    try:
+        assert database.one('SELECT status FROM runs WHERE id=?',(run,))['status']=='completed'
+        assert [c['function']['name'] for c in model.choices[:3]]==['web_search','update_travel_plan','delegate_travel']
+        assert len(captured)==1
+        flight,hotel=captured[0].queries
+        assert flight.criteria['departure_date']==hotel.criteria['check_in']=='2090-05-01'
+        assert flight.criteria['return_date']==hotel.criteria['check_out']=='2090-05-07'
+        assert flight.criteria['cabin']=='economy'
+        draft=TravelPlans(database).load(user,sid)
+        assert 'start_date' not in draft['confirmed'] and 'window_label' not in draft['selected']
+        reply=database.rows("SELECT content FROM messages WHERE session_id=? AND role='assistant'",(sid,))[-1]['content']
+        assert 'proposed; assumed dates' in reply and 'May 01, 2090 → May 07, 2090' in reply
+        assert 'Please provide departure date' not in reply
+        assert sightseeing.await_count==int(itinerary)
+        if itinerary:assert [c['function']['name'] for c in model.choices[:5]]==['web_search','update_travel_plan','delegate_travel','web_search','compose_trip']
+    finally:await service.close()
+
+
+def test_proposed_window_survives_restart_and_explicit_correction_clears_it(database,users):
+    plans,user,sid,mid=seed(database,users,'Choose Portugal for a week.')
+    plans.update(user,sid,mid,DraftUpdate(windows=[{'start_date':'2090-05-01','end_date':'2090-05-07',
+        'label':'best_overall_fit','reason':'Seasonal fit','source_urls':[URL]}]),SOURCES,TODAY)
+    assert plans.propose_window(user,sid,mid,'Portugal',TODAY)['start']=='2090-05-01'
+    draft=TravelPlans(Database(database.path)).load(user,sid)
+    assert 'proposed; assumed dates' in planning_disclosure(draft,{})
+    assert not draft['confirmed']
+    correction=database.message(user,sid,'user','Actually start on 2090-06-01.')
+    draft=plans.update(user,sid,correction,DraftUpdate(confirmed=[confirmed('start_date','2090-06-01',correction,'2090-06-01')]),[],TODAY)
+    assert not draft['windows'] and 'departure_date' not in draft['assumptions']
+
+
 @pytest.mark.parametrize('intent,text', [('explore', 'Somewhere warm with good food for two weeks. Just choose.'),
                                        ('compare', 'I can take two weeks off; show options for Japan without exact dates.')])
 async def test_loose_requests_research_before_questions_without_availability(database, users, intent, text):
